@@ -13,12 +13,7 @@ npm start            # start the bot (will prompt for server host/port)
 npm run observer     # start the browser observer on :3000
 ```
 
-The bot only connects to servers that run in **offline mode** (no Mojang authentication). If you don't have a server handy, a local one is enough for development:
-
-```bash
-# in another terminal
-npx --yes minecraft-server --offline
-```
+The bot only connects to servers that run in **offline mode** (no Mojang authentication).
 
 ## Repository layout
 
