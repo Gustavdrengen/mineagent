@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "mineagent": {
+      "command": "bash",
+      "args": ["workflow/start-mcp.sh"],
+      "env": {
+        "MINEAGENT_MCP_PIDFILE": ".runtime/mcp-server.pid"
+      }
+    }
+  }
+}

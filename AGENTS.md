@@ -178,3 +178,24 @@ What is broken / rough / missing in a way a user would notice:
 What is "there" but feels bad to use:
 - The dynamic import in two of the new `update_skill` / `remove_skill` tests is redundant with the top-level static import in test/tools.test.js. Stylistic, not a bug.
 - The new tests duplicate the `test('cleanup', ...)` pattern at the end of test/tools.test.js. Node's runner runs both; not a failure, but cleaner would be a single shared cleanup.
+
+### 2026-06-13 — MCP-first architecture, broad tool API, workflow moved to workspace
+
+What works:
+- The persona, the CLI, and any MCP client (Codebuff, Claude Desktop, a custom harness, the test runner) all drive MineAgent through a single stdio JSON-RPC 2.0 server at `src/mcp-server.js`. The launch surface is `workspace/start-mcp.sh` + `workspace/.agents/mcp.json`. The server enforces "one instance at a time" via a pidfile and SIGTERMs any previous owner on startup. Re-running the start script is always safe.
+- The MCP server's `tools/list` exposes a broad API: connection and session tools, in-world communication (`send_chat`, `speak`), bookkeeping (list/read/write memories, last-known server), skill discovery and read (list/read skills, scripts, proposals), and skill management (`propose_skill_change` + gated `create_skill` / `update_skill` / `remove_skill` / `create_script`). The persona and the player-written tools are peers at the tool-call layer.
+- New tools in the registry: `send_chat` (in-world voice, kind=not_connected on failure), `read_skill`, `read_script`, `read_memory` (so the persona can pull in player-written content through the MCP server). `send_chat` uses best-effort kind inference from the error message; a typed `NotConnectedError` from `connection.js` would make this reliable.
+- The MCP server's lifecycle is sound: `writePidfile` on startup, SIGTERM with 2s grace, SIGKILL fallback, pidfile removed on SIGINT/SIGTERM/exit/uncaughtException/unhandledRejection. Stale pidfiles (from `kill -9`) are detected and overwritten on next start.
+- `workspace/AGENTS.md` is rewritten to be crystal clear: the single most important rule is that the persona communicates with Minecraft *only* through the MCP server, never through `../src/` directly. The broad API table is grouped by category (connection, in-world, bookkeeping, skill discovery/read, skill management). The "Custom tools and the broad API" section explains that player-written skills have the same access.
+- VISION.md's "Harness-Agnostic Tool Surface" section is replaced with "MCP-Based Tool Surface", with a "Why MCP and not a custom manifest" subsection. Project layout, design goals, and success criteria updated.
+- `specs/mcp.md` is the new behavior contract for the MCP server (transport, methods, manifest shape, tool call shape, lifecycle, JSON-RPC error codes, server identity, self-test list).
+- `src/persona.js` documents the boundary explicitly: the persona's in-process loop imports `callTool` directly (runtime path), while the MCP server is the public surface for any external LLM harness. Both wrap the same `tools` array.
+- 124/124 tests passing (`npm test`). Smoke check OK (`npm run smoke`).
+
+What is broken / rough / missing in a way a user would notice:
+- The shutdown handler still auto-commits anything in `workspace/skills/` and `workspace/scripts/` via `commitImprovements`, which is in tension with the new consult-before-commit flow. The state-of-play entry flags this for the next session; the gate needs to move to only commit files with a matching approved proposal, or to emit a chat summary instead of committing.
+- `workspace/AGENTS.md` "Sources of truth" still says "Do not call into it directly — go through the MCP server" without a one-line cross-reference to the `src/persona.js` note about the in-process `callTool` being the one explicit exception. A future reader will hit the apparent contradiction. Cheap to add.
+- `send_chat` kind inference is a string match on the error message (`message.includes('not connected') || message.includes('no bot')`). Will silently break the day the connection layer rewrites its error text. A typed error class from `connection.js` would fix this.
+
+What is "there" but feels bad to use:
+- The MCP server's real subprocess test (the last test in `test/mcp-server.test.js`) spawns a real `node src/mcp-server.js` and filters out `DeprecationWarning` lines from stderr. The filter is robust to Node version changes now, but a future feature that legitimately needs to write to stderr (e.g., a startup progress line) will silently confuse this test. A `MA_VERBOSE=1` env var or a dedicated log channel would be cleaner.

@@ -194,6 +194,15 @@ export async function startPersona({
 // intentionally NOT re-exported — harnesses should consume the
 // manifest and route tool calls through `callTool` so that the
 // unknown-tool diagnostic and exception wrapping are guaranteed.
+//
+// Note on MCP vs in-process callTool: the persona's JavaScript loop
+// imports callTool directly from `./tools/index.js`. This is
+// deliberate — the in-process call is the runtime path, and forcing
+// the persona to round-trip through the MCP server's stdio JSON-RPC
+// would add a parse/encode step with no benefit. The MCP server
+// (src/mcp-server.js) is the *public* surface for any external LLM
+// harness (Codebuff, Claude Desktop, a custom agent, the CLI in
+// --mcp mode). Both paths wrap the same `tools` array.
 export {
   callTool,
   getToolManifest,

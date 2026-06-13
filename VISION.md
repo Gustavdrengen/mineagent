@@ -69,17 +69,41 @@ The agent should have all of the connection-related tools it needs built in, inc
 - `connect_to_last_known_server` — re-connect to the server saved in `memories/` from a previous run
 - `forget_last_server` — clear the remembered server when the user changes context
 
-## Harness-Agnostic Tool Surface
+## MCP-Based Tool Surface
 
-MineAgent exposes its tools in a **harness-agnostic** shape: a strict JSON Schema subset (`type`, `properties`, `required`, `additionalProperties`) with `name` and `description` on the tool itself. There is no provider-specific envelope (no OpenAI `type: "function"` wrapper, no MCP `inputSchema` rename, no Gemini-specific fields).
+MineAgent exposes its tools through an **MCP (Model Context Protocol) server** at `src/mcp-server.js`. The MCP server is the single bridge between the persona (or any MCP client) and the Mineflayer stack. The persona never calls into `src/` directly; every action flows through a `tools/call` request to the server.
 
-A parent agent — whether driven by OpenAI, Anthropic, MCP, Gemini, a custom in-process loop, or a test harness — can consume `getToolManifest()` and call `callTool(name, args)` without coupling to any vendor. Thin adapter layers (one page, not shipped here) map the manifest to the provider of choice.
+The server speaks **line-delimited JSON-RPC 2.0 over stdio**, which is the standard MCP transport. It implements the three methods any MCP client needs to drive a tool-using agent:
+
+- `initialize` — handshake; returns the protocol version, server capabilities, and server identity.
+- `tools/list` — returns the harness-agnostic tool manifest, with `name`, `description`, and a strict JSON Schema `parameters` object per tool. No provider-specific envelope (no OpenAI `type: "function"`, no Anthropic wrapper); the same shape works for every MCP client.
+- `tools/call` — invokes a tool by name with arguments; returns the structured `{ content: [{ type: "text", text }], isError }` result.
+
+The server is started by the start script at `workspace/start-mcp.sh`, which the MCP config at `workspace/.agents/mcp.json` references. The server itself enforces **one instance at a time**: on startup it reads the pidfile at `$MINEAGENT_MCP_PIDFILE` (default `.runtime/mcp-server.pid`), sends SIGTERM to any process recorded there, waits up to 2 seconds, and then writes its own PID. This means re-running the start script is always safe; the previous instance is shut down before the new one starts.
+
+### The broad API
+
+The MCP server's `tools/list` exposes a single, broad API. From the calling perspective there is no distinction between "built-in" tools and "player-written" tools — every tool is just a name, a description, a parameter schema, and an executor reachable through `tools/call`.
+
+The broad API covers:
+
+- **Connection and session.** connect, disconnect, status, set username, ask the user, reconnect to the last server, forget it, shut down.
+- **In-world communication.** `send_chat` for chat, `speak` for browser TTS.
+- **Bookkeeping.** list/read/write memories; read the last-known server; persist session notes.
+- **Skill discovery and read.** list/read skills and scripts; list/read proposals.
+- **Skill management (committed).** `propose_skill_change` is the only path to a committed modification to `workspace/skills/` or `workspace/scripts/`. The execute tools (`create_skill`, `update_skill`, `remove_skill`, `create_script`) are gated by an in-session user approval in chat.
+
+Custom tools the persona writes — markdown skills, JS scripts, ad-hoc helpers — have access to the same broad API. When a skill says "first read the `cave-scout` skill, then call `send_chat`", both `read_skill` and `send_chat` are in the broad API, and the persona or any other tool can call them through the MCP server.
+
+### Why MCP and not a custom manifest
 
 The persona is the single, programmatic way to boot the in-world agent: `startPersona({ host?, port?, username?, goal? })` returns a wired-up tool manifest, an attached chat listener, an optional observer handle, and a `callTool` entry point. The CLI is a thin readline wrapper around it.
 
+The MCP server wraps the same `callTool(name, args)` surface in a standard protocol that any MCP client can speak: Codebuff, Claude Desktop, a custom harness, the test runner, the CLI, or a future tool. The persona and the CLI can both speak MCP; the server is the single point of truth for the tool palette.
+
 ## Basic Project Layout (minimum, will contain more files)
 
-MineAgent's playing agent lives in a dedicated workspace subdirectory. The rest of the project — the Mineflayer bot code, the browser observer server, the UI, and supporting docs — sits alongside it as the implementation that powers the agent.
+MineAgent's playing agent lives in a dedicated workspace subdirectory. The rest of the project — the Mineflayer bot code, the browser observer server, the UI, the MCP server, and supporting docs — sits alongside it as the implementation that powers the agent.
 
 ### Directory Layout
 
@@ -89,9 +113,10 @@ MineAgent's playing agent lives in a dedicated workspace subdirectory. The rest 
       VISION.md
       package.json
       .gitignore
-      src/                      <- Mineflayer bot code
+      src/                      <- Mineflayer bot code + MCP server
         index.js                <- CLI entry (readline wrapper around startPersona)
         persona.js              <- programmatic entry point for the in-world agent
+        mcp-server.js           <- stdio JSON-RPC MCP server (tools/list, tools/call)
         connection.js
         state.js
         events.js
@@ -104,6 +129,8 @@ MineAgent's playing agent lives in a dedicated workspace subdirectory. The rest 
       docs/
       workspace/                <- the playing agent's home
         AGENTS.md               <- operating instructions for the playing agent
+        start-mcp.sh            <- starts the MCP server (idempotent)
+        .agents/mcp.json        <- MCP server config
         skills/                 <- reusable behaviors
         scripts/                <- on-demand helpers
         memories/               <- run-local notes (gitignored)
@@ -129,7 +156,7 @@ The agent should not need a long checklist of pre-baked content. It should start
 
 ### Where Runtime Artifacts Go
 
-Runtime state, logs, caches, credentials, and session artifacts all live under a single `.runtime/` directory inside `workspace/`, which is gitignored. The committed workspace structure only contains the playing agent's general-purpose artifacts.
+Runtime state, logs, caches, credentials, and session artifacts all live under a single `.runtime/` directory inside `workspace/`, which is gitignored. The committed workspace structure only contains the playing agent's general-purpose artifacts. The MCP server's pidfile lives at `.runtime/mcp-server.pid`.
 
 ## Memories
 
@@ -142,6 +169,7 @@ It is the place for:
 - reflections on what went well or badly
 - notes specific to a particular server, build, or task
 - `last-server.json` — the persistent "last known server" memory that powers the vision's "from a previous run saved in memories/" branch
+- `proposals/` — pending skill-change proposals (gitignored); the only path to a committed skill or script change
 
 Anything that grows there is local to the run that produced it. The committed skills and scripts should be treated as a shared, general-purpose library. The memories folder is the agent's private notebook.
 
@@ -252,7 +280,8 @@ MineAgent should be:
 - clean to shut down
 - safe to operate
 - easy to resume later
-- **harness-agnostic** — its tool manifest works with any LLM harness
+- **MCP-first** — the persona and any external client drive the bot through the MCP server
+- **harness-agnostic** — the tool manifest is a strict JSON Schema subset any LLM harness can consume
 
 ## Non-Goals
 
@@ -275,8 +304,10 @@ MineAgent succeeds if it can:
 - keep session-specific work in a gitignored `memories/` folder
 - promote only general improvements into committed `skills/` and `scripts/`
 - shut down cleanly and commit only the useful, general changes
-- expose its tool palette in a harness-agnostic manifest that any LLM harness can consume
+- expose its tool palette through an MCP server that any MCP client can drive
 - boot the in-world persona through a single `startPersona()` entry point
 - classify every connection failure into a stable `error.kind` the agent can branch on
 - propose (never unilaterally commit) changes to its shared `skills/` and `scripts/` libraries, after consulting the user
 - keep its `skills/` and `scripts/` world-agnostic and up to date with the tools it has
+- reach the player-written `skills/` and `scripts/` through the broad API the MCP server exposes
+- start the MCP server from a workflow script that is safe to re-run (one instance at a time, pidfile-based)

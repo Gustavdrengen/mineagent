@@ -53,6 +53,9 @@ import {
   listSkills,
   listScripts,
   listMemories,
+  readSkill,
+  readScript,
+  readMemory,
   proposeSkillChange,
   listProposals,
   readProposal,
@@ -163,6 +166,38 @@ export const tools = [
       'current task, and last error.',
     parameters: buildParameters({}),
     execute: async () => ({ ok: true, ...getStatus() }),
+  },
+  {
+    name: 'send_chat',
+    description:
+      'Send a line of text in chat. This is the in-world voice of the ' +
+      'persona — use it to respond to the user, narrate what you are ' +
+      'about to do, or echo a proposal for approval. A successful send ' +
+      'returns ok=true. On failure (the most common case being that ' +
+      'the bot is not connected to a server) returns ok=false with a ' +
+      'structured kind, typically "not_connected".',
+    parameters: buildParameters({
+      text: PARAM.string('Chat line to send.', { required: true }),
+    }),
+    execute: async ({ text } = {}) => {
+      if (typeof text !== 'string' || text.length === 0) {
+        return { ok: false, error: 'text is required' };
+      }
+      try {
+        await sendChat(text);
+        return { ok: true, sent: text };
+      } catch (err) {
+        // The most common cause is that the bot is not in the world,
+        // but the connection layer may surface other failures. We
+        // record a best-effort kind and let the persona branch on the
+        // message if it needs to.
+        const message = typeof err.message === 'string' ? err.message.toLowerCase() : '';
+        const kind = message.includes('not connected') || message.includes('no bot')
+          ? 'not_connected'
+          : 'send_failed';
+        return { ok: false, error: err.message, kind };
+      }
+    },
   },
   {
     name: 'ask_user_for_server',
@@ -422,6 +457,52 @@ export const tools = [
     description: 'List the files currently in workspace/memories/.',
     parameters: buildParameters({}),
     execute: async () => ({ ok: true, memories: listMemories() }),
+  },
+  {
+    name: 'read_skill',
+    description:
+      'Read the body of a skill in workspace/skills/. Use this to ' +
+      'pull in a player-written or runtime-written skill before ' +
+      'following its workflow. The persona\'s broad API reaches into ' +
+      'the workspace through the MCP server, so reading a skill is ' +
+      'just a tool call. Returns { ok, body, path, name, kind } on ' +
+      'success, or { ok: false, kind: "not_found" } if the skill is ' +
+      'missing.',
+    parameters: buildParameters({
+      name: PARAM.string('Alphanumeric skill name (no extension).', {
+        required: true,
+      }),
+      kind: PARAM.string('"doc" (default) or "code".', {
+        enum: ['doc', 'code'],
+      }),
+    }),
+    execute: async ({ name, kind } = {}) => readSkill({ name, kind }),
+  },
+  {
+    name: 'read_script',
+    description:
+      'Read the body of a helper script in workspace/scripts/. Same ' +
+      'shape as read_skill, scoped to .js scripts.',
+    parameters: buildParameters({
+      name: PARAM.string('Alphanumeric script name (no extension).', {
+        required: true,
+      }),
+    }),
+    execute: async ({ name } = {}) => readScript({ name }),
+  },
+  {
+    name: 'read_memory',
+    description:
+      'Read a memory file from workspace/memories/. Memories are ' +
+      'gitignored, so this is local-only. Pass the full filename ' +
+      'including the extension (e.g., "last-server.json" or ' +
+      '"session-1.md").',
+    parameters: buildParameters({
+      name: PARAM.string('Memory filename including extension.', {
+        required: true,
+      }),
+    }),
+    execute: async ({ name } = {}) => readMemory({ name }),
   },
 ];
 

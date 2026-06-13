@@ -111,6 +111,65 @@ export function listMemories() {
   return listDir(memoriesDir, ['.md', '.json']);
 }
 
+// Read a single file's body. The persona's "broad API" reaches into
+// the workspace through the MCP server, and it needs to be able to read
+// what the player (or a previous run) has written. Reads are always
+// allowed; only the propose-then-approve path is gated. Returns the
+// body as a string on success, or { ok: false, kind: 'not_found' } if
+// the file does not exist. `readProposal` is the structured counterpart
+// (it returns the parsed frontmatter as well) and is defined in the
+// proposal section below.
+export function readSkill({ name, kind = 'doc' } = {}) {
+  return readBody(skillsDir, name, kind === 'code' ? '.js' : '.md');
+}
+
+export function readScript({ name } = {}) {
+  return readBody(scriptsDir, name, '.js');
+}
+
+export function readMemory({ name } = {}) {
+  // Memories can be .md (notes) or .json (last-server.json). The caller
+  // picks by extension convention: pass the name with the extension.
+  return readBodyRaw(memoriesDir, name);
+}
+
+function readBody(dir, name, ext) {
+  const safe = safeName(name);
+  if (!safe) return { ok: false, error: 'name must be alphanumeric (a-z 0-9 _ -)' };
+  const target = path.join(dir, `${safe}${ext}`);
+  if (!fs.existsSync(target)) {
+    return { ok: false, error: 'not found', kind: 'not_found', path: target };
+  }
+  try {
+    const text = fs.readFileSync(target, 'utf8');
+    return { ok: true, path: target, name: safe, kind: ext === '.js' ? 'code' : 'doc', body: text };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+function readBodyRaw(dir, name) {
+  // `readBodyRaw` is used for memories, which may have any extension
+  // (e.g., last-server.json is .json). The name passed in must already
+  // include the extension.
+  if (typeof name !== 'string' || name.length === 0) {
+    return { ok: false, error: 'name is required' };
+  }
+  if (!/^[a-z0-9_\-.]+$/i.test(name)) {
+    return { ok: false, error: 'name must be alphanumeric with optional . _ -' };
+  }
+  const target = path.join(dir, name);
+  if (!fs.existsSync(target)) {
+    return { ok: false, error: 'not found', kind: 'not_found', path: target };
+  }
+  try {
+    const text = fs.readFileSync(target, 'utf8');
+    return { ok: true, path: target, name, body: text };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
 function listDir(dir, exts) {
   try {
     if (!fs.existsSync(dir)) return [];
