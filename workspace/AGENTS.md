@@ -31,15 +31,27 @@ When the user gives you a goal:
 
 You connect to servers using the tools in `../src/tools/`:
 
-- `connect_to_server(host, port?, username?)` — join a server.
+- `connect_to_server(host, port?, username?)` — join a server. On failure, returns `{ ok: false, error, kind }` where `kind` is a stable classification.
 - `disconnect_from_server()` — leave cleanly.
 - `set_username(name)` — set the bot's username for the next connect.
 - `connection_status()` — check the current state.
 - `ask_user_for_server()` — ask the user for the IP/port you are missing.
+- `connect_to_last_known_server()` — re-connect to the server from the last successful run (read from `memories/last-server.json`).
+- `forget_last_server()` — clear the remembered server when the user changes context.
 
 You only connect to **offline-mode** servers. If the user asks you to connect to a server that requires Mojang authentication, refuse and explain.
 
 The default username is `MineAgent`. Override it with `set_username` before connecting if the user wants a different name.
+
+### When a connection fails
+
+Read the `kind` field, **not** the `error` string, to decide your next move. The stable kinds are defined in `src/connection.js` (`ERROR_KIND`) and listed in `specs/connection.md`. The short version:
+
+- `unreachable`, `refused`, `timeout` — retry once, then ask the user.
+- `auth_required`, `version_mismatch` — do **not** retry; surface the reason.
+- `not_whitelisted` — ask the user to add the bot to the whitelist or try a different username.
+- `no_host` — call `ask_user_for_server` and try again with the answer.
+- `unknown_tool` — the harness that spawned you forgot to attach the MineAgent tool set. Surface the `hint` field to the user verbatim; do not fish through `../src/`.
 
 ## Self-improvement
 

@@ -61,11 +61,21 @@ The user should never have to run a separate "start the bot" step. The agent sho
 
 The agent should have all of the connection-related tools it needs built in, including:
 
-- `connect_to_server` — start a Mineflayer connection given a host, port, and username; reports success, failure, or a specific error
+- `connect_to_server` — start a Mineflayer connection given a host, port, and username; reports success, failure, or a **classified error** (unreachable, refused, timeout, auth_required, version_mismatch, not_whitelisted, kicked)
 - `disconnect_from_server` — clean shutdown of the current connection
 - `set_username` — override the username used for the next connect
 - `connection_status` — report the current connection state (connected, disconnected, reconnecting, error)
 - `ask_user_for_server` — prompt the user for the IP/port or other connection details the agent is missing
+- `connect_to_last_known_server` — re-connect to the server saved in `memories/` from a previous run
+- `forget_last_server` — clear the remembered server when the user changes context
+
+## Harness-Agnostic Tool Surface
+
+MineAgent exposes its tools in a **harness-agnostic** shape: a strict JSON Schema subset (`type`, `properties`, `required`, `additionalProperties`) with `name` and `description` on the tool itself. There is no provider-specific envelope (no OpenAI `type: "function"` wrapper, no MCP `inputSchema` rename, no Gemini-specific fields).
+
+A parent agent — whether driven by OpenAI, Anthropic, MCP, Gemini, a custom in-process loop, or a test harness — can consume `getToolManifest()` and call `callTool(name, args)` without coupling to any vendor. Thin adapter layers (one page, not shipped here) map the manifest to the provider of choice.
+
+The persona is the single, programmatic way to boot the in-world agent: `startPersona({ host?, port?, username?, goal? })` returns a wired-up tool manifest, an attached chat listener, an optional observer handle, and a `callTool` entry point. The CLI is a thin readline wrapper around it.
 
 ## Basic Project Layout (minimum, will contain more files)
 
@@ -76,17 +86,27 @@ MineAgent's playing agent lives in a dedicated workspace subdirectory. The rest 
     MineAgent/                  <- the MineAgent project root
       README.md
       AGENTS.md
+      VISION.md
       package.json
       .gitignore
       src/                      <- Mineflayer bot code
+        index.js                <- CLI entry (readline wrapper around startPersona)
+        persona.js              <- programmatic entry point for the in-world agent
+        connection.js
+        state.js
+        events.js
+        improve.js
+        tools/                  <- tool registry (manifest, callTool)
+        skills/                 <- skills exposed to the agent loop
       server/                   <- browser observer server
       ui/                       <- browser observer UI
+      specs/                    <- behavior contracts (root + per-module)
       docs/
       workspace/                <- the playing agent's home
-        AGENTS.md               <- operating instructions for the playing agent at runtime
-        skills/
-        scripts/
-        memories/
+        AGENTS.md               <- operating instructions for the playing agent
+        skills/                 <- reusable behaviors
+        scripts/                <- on-demand helpers
+        memories/               <- run-local notes (gitignored)
 
 `workspace/` is the playing agent's home. That is where the agent runs from, and that is where it reads its instructions and stores its working files. Keeping the playing agent in its own subdirectory keeps it self-contained and independent of the supporting code.
 
@@ -103,7 +123,7 @@ Starting contents:
   - basic world interaction (look at block, mine a block by name, place a block)
   - status reporting (inventory, health, position, current task)
 - `scripts/` — empty, ready for helper scripts the agent may create
-- `memories/` — empty, ready for session notes (not committed)
+- `memories/` — empty, ready for session notes (not committed); includes `last-server.json` for persistent server memory
 
 The agent should not need a long checklist of pre-baked content. It should start lean and grow skills and scripts on demand. New personas or specialized agents can be added later as additional skills that bundle prompts, tools, and behaviors.
 
@@ -121,6 +141,7 @@ It is the place for:
 - plans the agent makes for a run
 - reflections on what went well or badly
 - notes specific to a particular server, build, or task
+- `last-server.json` — the persistent "last known server" memory that powers the vision's "from a previous run saved in memories/" branch
 
 Anything that grows there is local to the run that produced it. The committed skills and scripts should be treated as a shared, general-purpose library. The memories folder is the agent's private notebook.
 
@@ -181,7 +202,7 @@ When the player tells the bot to shut down, MineAgent should:
 5. commit the promoted improvements with a special shutdown commit message
 6. disconnect cleanly from the server
 
-The shutdown commit should preserve useful self-improvements from the session, while leaving session-specific memories uncommitted.
+The shutdown commit should preserve useful self-improvements from the session, while leaving session-specific memories (including `last-server.json`) uncommitted.
 
 ## Design Goals
 
@@ -194,6 +215,7 @@ MineAgent should be:
 - clean to shut down
 - safe to operate
 - easy to resume later
+- **harness-agnostic** — its tool manifest works with any LLM harness
 
 ## Non-Goals
 
@@ -202,6 +224,7 @@ MineAgent is not trying to be:
 - a GUI automation demo
 - a brittle one-off bot
 - a full replacement for a human player
+- a wrapper around a single LLM provider
 
 ## Success Criteria
 
@@ -215,3 +238,6 @@ MineAgent succeeds if it can:
 - keep session-specific work in a gitignored `memories/` folder
 - promote only general improvements into committed `skills/` and `scripts/`
 - shut down cleanly and commit only the useful, general changes
+- expose its tool palette in a harness-agnostic manifest that any LLM harness can consume
+- boot the in-world persona through a single `startPersona()` entry point
+- classify every connection failure into a stable `error.kind` the agent can branch on

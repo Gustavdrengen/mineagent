@@ -1,25 +1,18 @@
 #!/usr/bin/env node
 // MineAgent CLI entry point.
 //
-// Parses flags, prompts for host/port if missing, connects, attaches the
-// agent loop, and stays alive on a readline loop. Each non-empty line
-// other than `quit`/`exit` is dispatched to the agent as a goal; the
-// result is logged and spoken (the speak tool handles TTS).
-//
-// Shutdown: any of EOF, "quit", "exit", or SIGINT/SIGTERM triggers
-// `src/shutdown.js`, which writes a session summary, attempts a commit
-// of promoted improvements, and disconnects cleanly.
+// This is a thin readline wrapper around `startPersona` from
+// `src/persona.js`. The single programmatic entry point is the persona
+// function; the CLI exists so a human can drive the bot interactively
+// from a terminal. External harnesses (LLM-driven, MCP, test) should
+// import `startPersona` directly and skip this file entirely.
 
 import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
-import {
-  connectToServer,
-  disconnectFromServer,
-  getStatus,
-} from './connection.js';
-import { state, STATUS } from './state.js';
-import { attachChatListener, runGoal } from './agent.js';
+import { startPersona, runGoal, getToolManifest } from './persona.js';
 import { shutdown } from './shutdown.js';
+import { state, STATUS } from './state.js';
+import { disconnectFromServer, getStatus } from './connection.js';
 
 function parseArgs(argv) {
   const out = {};
@@ -29,6 +22,7 @@ function parseArgs(argv) {
     else if (a === '--port' || a === '-p') out.port = Number(argv[++i]);
     else if (a === '--username' || a === '-u') out.username = argv[++i];
     else if (a === '--goal' || a === '-g') out.goal = argv[++i];
+    else if (a === '--print-manifest') out.printManifest = true;
     else if (a === '--help') out.help = true;
   }
   return out;
@@ -42,25 +36,18 @@ Options:
   -p, --port <port>        Minecraft server port (default 25565)
   -u, --username <name>    Bot username (default MineAgent)
   -g, --goal <text>        Run a single goal and exit
+  --print-manifest         Print the tool manifest as JSON and exit
   --help                   Print this help
 
 While running, type a goal (e.g. "say hello", "go to 0, 64, 0",
 "mine 3 oak_log") and press enter. Type "quit" or "exit" to shut
 down cleanly. The agent also responds to in-game chat commands
 (!status, !come, !stop, !look, !inventory, !help).
-`);
-}
 
-async function promptForServer() {
-  const rl = readline.createInterface({ input, output });
-  try {
-    const host = (await rl.question('Server host (IP or hostname): ')).trim();
-    const portRaw = (await rl.question('Server port [25565]: ')).trim();
-    const port = portRaw ? Number(portRaw) : 25565;
-    return { host: host || null, port };
-  } finally {
-    rl.close();
-  }
+External harnesses (MCP, OpenAI, Anthropic, Gemini, custom) should
+import startPersona from src/persona.js and consume getToolManifest()
++ callTool() directly; no CLI is required.
+`);
 }
 
 let cleanupInProgress = false;
@@ -93,42 +80,37 @@ async function main() {
     printHelp();
     return;
   }
-
-  const username = opts.username || state.config.username;
-  let { host, port = state.config.port } = opts;
-
-  if (!host) {
-    const prompted = await promptForServer();
-    host = prompted.host;
-    port = prompted.port;
+  if (opts.printManifest) {
+    console.log(JSON.stringify(getToolManifest(), null, 2));
+    return;
   }
-  if (!host) {
-    console.error('[mineagent] no host provided.');
+
+  // Delegate the entire connect + listener + manifest wiring to
+  // startPersona. The CLI only owns the readline loop and shutdown.
+  const persona = await startPersona({
+    host: opts.host,
+    port: opts.port,
+    username: opts.username,
+    goal: opts.goal,
+    prompt: !opts.host, // prompt when no host on the command line
+    attachChat: true,
+  });
+
+  if (!persona.ok) {
+    console.error(`[mineagent] could not start persona: ${persona.error}`);
+    if (persona.kind) console.error(`[mineagent] kind: ${persona.kind}`);
     process.exitCode = 1;
     return;
   }
 
-  console.log(
-    `[mineagent] connecting to ${host}:${port} as ${username} (offline mode)...`
-  );
-  const result = await connectToServer({ host, port, username });
-
-  if (!result.ok) {
-    console.error(`[mineagent] connection failed: ${result.error}`);
-    process.exitCode = 1;
-    return;
-  }
-
-  const off = attachChatListener();
   console.log('[mineagent] connected. Status:', getStatus());
   console.log(
     '[mineagent] type a goal, "quit"/"exit" to shut down, or Ctrl-C to abort.'
   );
 
-  // Single-goal mode: run the goal and exit.
   if (opts.goal) {
-    const goalResult = await runGoal(opts.goal);
-    console.log('[mineagent] goal result:', goalResult);
+    // Single-goal mode: runGoal was already invoked by startPersona.
+    console.log('[mineagent] goal result:', persona.goalResult);
     await cleanupAndExit(null, 'goal complete');
     return;
   }
@@ -157,11 +139,7 @@ async function main() {
     });
   }
 
-  // The chat listener lives for the lifetime of the process and is
-  // shut down by the disconnect path in cleanupAndExit. The unsubscribe
-  // is intentionally not called on `beforeExit` because that hook never
-  // fires once cleanupAndExit calls process.exit(0).
-  void off;
+  void persona;
 }
 
 main().catch((err) => {

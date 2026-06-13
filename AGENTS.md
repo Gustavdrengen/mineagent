@@ -156,3 +156,29 @@ What is broken / rough / missing in a way a user would notice:
 What is "there" but feels bad to use:
 - The five connection tools are plain functions, not a discoverable registry with descriptions. They will need a tool-spec surface once an agent loop is added.
 - `connection.js` mixes Mineflayer event handling with our state machine; the boundary will benefit from a thin adapter once the agent loop is added.
+
+### 2026-06-13 — harness-agnostic tool surface, error.kind classification, startPersona, last-known-server memory
+
+What works:
+- Tool registry now exposes a harness-agnostic manifest: `getToolManifest()` returns `{ name, description, parameters }` for each tool with a strict JSON Schema subset (`type`, `properties`, `required`, `additionalProperties: false`). No provider-specific envelope. Any LLM harness can consume the manifest and route calls through `callTool(name, args)`.
+- New `callTool(name, args)` is the single harness-facing entry point. Unknown names return `kind: 'unknown_tool'` with a `hint` listing registered tools. Throwing tools return `kind: 'execution_error'`.
+- New tools: `connect_to_last_known_server`, `forget_last_server`. The full set is 15 tools.
+- `connectToServer` now classifies every failure into a stable `error.kind` (`unreachable`, `refused`, `timeout`, `auth_required`, `version_mismatch`, `not_whitelisted`, `kicked`, `no_host`, `already_connecting`, `unknown`). The persona loop can branch on `kind` rather than the raw `error` string.
+- Last-known server memory at `workspace/memories/last-server.json` (gitignored). Every connect attempt (success or failure) updates it. `connect_to_last_known_server` reads it and reconnects.
+- New `src/persona.js` exposes `startPersona({ host?, port?, username?, goal?, prompt?, attachChat? })` — a single programmatic entry point that returns a wired-up manifest, attaches the chat listener, and resolves a server from `arg > memory > prompt > none`.
+- CLI (`src/index.js`) is now a thin readline wrapper around `startPersona`. New `--print-manifest` flag outputs the tool manifest as JSON.
+- `specs/tools.md` is the new canonical tool contract (shape, error kinds, harness adapter map). `specs/connection.md` is updated with the new `error.kind` table.
+- `VISION.md` documents the harness-agnostic surface and adds new success criteria.
+- `workspace/AGENTS.md` is updated with the new tools and the diagnose-on-failure flow.
+- 101 tests passing (`npm test`). Smoke check OK (`npm run smoke`).
+- A rogue commit (8e1491d) that introduced an unrequested skill file was dropped from history; the file was erased and all stale doc references were removed.
+
+What is broken / rough / missing in a way a user would notice:
+- A live offline-mode server is still required to actually exercise `connect_to_server` end-to-end. The test suite covers the resolution, classification, manifest, and tool surfaces, but not the protocol layer.
+- The browser observer (`server/`, `ui/`) is still the bootstrap static page; live state streaming remains a follow-up.
+- `startPersona` is in-process only. A future MCP or remote harness wrapper would need an adapter that maps the manifest to the provider envelope and forwards `callTool` invocations.
+
+What is "there" but feels bad to use:
+- The `classifyKickReason` function matches server kick reasons with exact regexes (`outdated client`, `incompatible protocol`, `client version`). Servers that phrase their kick reasons differently will fall through to `KICKED` and need manual triage by the persona.
+- `startPersona` mutates `state.config.host/port/username` even when the resolved value came from memory or a prompt. That keeps the config in sync with the current connection, but it means subsequent `state.config.*` reads reflect the last connect, not the bootstrap defaults.
+- The error-state test for `callTool` mutates `tools[0].execute` in place. That is the cleanest way to force a throw without adding a fixture registry, but it does depend on `tools` being a mutable array — which it is, by design, so future tools can be hot-registered.

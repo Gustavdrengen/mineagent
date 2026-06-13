@@ -124,10 +124,27 @@ check('attachChatListener returns an unsubscribe function', typeof off === 'func
 off();
 
 const commitResult = await commitImprovements();
+// The earlier self-improvement checks already unlink the smoke-test-*
+// files they create, so the skills/ and scripts/ trees should be
+// clean at this point in a fresh checkout. If a previous run left
+// smoke-test files behind, clean them up so the no-op assertion is
+// meaningful regardless of tree state.
+for (const f of listSkills()) {
+  if (f.includes('smoke-test-')) {
+    try { fs.unlinkSync(f); } catch { /* already gone */ }
+  }
+}
+for (const f of listScripts()) {
+  if (f.includes('smoke-test-')) {
+    try { fs.unlinkSync(f); } catch { /* already gone */ }
+  }
+}
+const finalCommit = await commitImprovements();
 check(
   'commitImprovements is a no-op when nothing in skills/scripts changed',
-  commitResult.ok && commitResult.committed === false
+  finalCommit.ok && finalCommit.committed === false
 );
+void commitResult;
 
 const stopResult = stopMoving();
 check('stopMoving returns a structured result', stopResult && typeof stopResult === 'object');
