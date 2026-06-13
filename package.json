@@ -11,11 +11,13 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node --test test/connection.test.js",
+    "test": "node --test test/events.test.js test/state.test.js test/connection.test.js test/skills.test.js test/agent.test.js test/improve.test.js test/shutdown.test.js",
     "smoke": "node test/smoke.js",
     "observer": "node server/index.js"
   },
   "dependencies": {
-    "mineflayer": "^4.17.0"
+    "mineflayer": "^4.17.0",
+    "mineflayer-pathfinder": "^2.4.5",
+    "ws": "^8.21.0"
   }
 }
