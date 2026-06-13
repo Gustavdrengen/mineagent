@@ -214,3 +214,18 @@ What is broken / rough / missing in a way a user would notice:
 
 What is "there" but feels bad to use:
 - The `try/finally` + manual `unlinkSync` pattern is repetitive across the four updated tests. A small `withMemoryCleanup(fn)` wrapper could collapse it, but the explicit `trackMemory` + `unlinkSync` makes the create-and-cleanup boundary obvious at the call site, which is the higher-value readability trade-off.
+
+### 2026-06-13 — fix MCP tools/list wire format: parameters -> inputSchema
+
+What works:
+- The MCP server's `tools/list` response now conforms to the MCP 2024-11-05 wire format. The argument schema field is `inputSchema` (camelCase), the value is a real JSON Schema object with `type: "object"`, `additionalProperties: false`, `properties`, and `required`. MCP clients that validate the response with a strict Zod schema (Codebuff, Claude Desktop, etc.) accept the manifest.
+- The rename happens at the MCP server boundary, not in the registry. `getToolManifest()` in `src/tools/index.js` still returns `{ name, description, parameters }` — that is the harness-agnostic name. The MCP server's `tools/list` handler maps `parameters` -> `inputSchema` on the way out. The registry is unchanged; the persona's in-process `callTool` path and any future OpenAI/Anthropic/Gemini adapter at the same boundary do their own renames.
+- A new strict regression test in `test/mcp-server.test.js` (`tools/list manifests conform to the MCP 2024-11-05 wire format`) JSON round-trips the response and asserts on every required MCP field. The test fails on the old code (`inputSchema` is `undefined`) and passes on the new code. The old `parameters` field is explicitly asserted absent on the wire.
+- `specs/mcp.md` tool manifest section updated; a new "Why `inputSchema` and not `parameters`" subsection documents the rename boundary and why the registry is unchanged.
+- 125/125 tests passing (`npm test`). Smoke check OK (`npm run smoke`).
+
+What is broken / rough / missing in a way a user would notice:
+- None new. The shutdown-handler/commitImprovements tension and the `send_chat` error-kind string match noted in the previous state-of-play entry are still open.
+
+What is "there" but feels bad to use:
+- The new wire-format test and the existing manifest test overlap in coverage (both check `inputSchema.type === "object"` and the absence of `execute`). The new test is intentionally stricter — it round-trips through JSON to catch non-serializable values, and it asserts the old `parameters` field is absent. The duplication is a small price for the regression-net property of the new test; it is the one that would have caught this bug.

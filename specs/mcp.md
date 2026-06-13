@@ -27,13 +27,13 @@ Requests without an `id` are treated as notifications and produce no response.
 
 ## Tool manifest
 
-`tools/list` returns `{ tools: [...] }`, where each entry is the same shape `getToolManifest()` produces in `src/tools/index.js`:
+`tools/list` returns `{ tools: [...] }`, where each entry conforms to the MCP 2024-11-05 tool descriptor shape:
 
 ```ts
 {
   name: string,
   description: string,
-  parameters: {  // strict JSON Schema subset
+  inputSchema: {  // strict JSON Schema subset, camelCase per MCP spec
     type: "object",
     additionalProperties: false,
     properties: { [argName: string]: JSONSchema },
@@ -43,6 +43,12 @@ Requests without an `id` are treated as notifications and produce no response.
 ```
 
 The `execute` function is **not** included; the manifest is the wire-safe projection.
+
+### Why `inputSchema` and not `parameters`
+
+The internal tool registry in `src/tools/index.js` calls the argument schema `parameters` — that is the harness-agnostic name (also the convention used by OpenAI function calling and the original Anthropic tool use spec). The MCP 2024-11-05 wire format names the same field `inputSchema` (camelCase). The MCP server is the adapter that does the rename on the way out: `tools/list` reads `getToolManifest()` and projects each entry to `{ name, description, inputSchema: parameters }` before sending. The registry itself is unchanged. Adapters for other harnesses (OpenAI's `function.parameters`, Gemini's `parameters`, etc.) live at the same boundary and do their own renames.
+
+Clients validate the response with a strict Zod schema. The response must contain `inputSchema` as a JSON object (not `null`, not `undefined`, not a JSON Schema string) — a missing or wrong-type `inputSchema` is rejected at the manifest level, not per-tool.
 
 ## Tool call
 

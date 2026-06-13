@@ -210,7 +210,29 @@ async function handleRequest(msg) {
       return makeResponse(id, {});
 
     case 'tools/list': {
-      const tools = getToolManifest();
+      // The MCP 2024-11-05 wire format names the argument schema
+      // `inputSchema` (camelCase). The internal registry in
+      // `src/tools/index.js` calls it `parameters` — that is the
+      // harness-agnostic name. The MCP server is the adapter that
+      // does the rename on the way out so the response validates
+      // against a strict MCP client schema.
+      //
+      // **Decision:** Rename `parameters` -> `inputSchema` at the
+      // MCP boundary, not in the registry. **Tier:** T1.
+      // **Evidence:** The MCP spec (2024-11-05) defines
+      // `inputSchema` as the field name on the tool descriptor.
+      // Clients validate the response with a strict Zod schema and
+      // reject the whole manifest when this is missing or the wrong
+      // type. **Trade-off:** Internal callers of `getToolManifest()`
+      // still see `parameters`; the rename is a wire-format concern,
+      // not a registry rename. Adapters for other harnesses (OpenAI,
+      // Anthropic, Gemini) live at the same boundary and can do
+      // their own renames.
+      const tools = getToolManifest().map(({ name, description, parameters }) => ({
+        name,
+        description,
+        inputSchema: parameters,
+      }));
       return makeResponse(id, { tools });
     }
 

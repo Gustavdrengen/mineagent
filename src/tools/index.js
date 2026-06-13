@@ -9,9 +9,15 @@
 //     execute:     async (args) => { ok, ... }
 //   }
 //
-// The `parameters` shape is the convergence point across MCP, OpenAI
-// function calling, Anthropic tool use, and Gemini function calling. It is
-// a strict JSON Schema subset (Draft 2020-12 compatible):
+// The SHAPE of `parameters` — a strict JSON Schema object (Draft 2020-12
+// compatible) with `{ type: "object", additionalProperties: false,
+// properties, required }` — is the convergence point across MCP, OpenAI
+// function calling, Anthropic tool use, and Gemini function calling.
+// The FIELD NAME varies by harness (MCP uses `inputSchema`, OpenAI
+// uses `function.parameters`, Gemini uses `parameters`, etc.). The
+// registry owns the shape and the canonical `parameters` name; each
+// harness adapter (e.g. the MCP server in `src/mcp-server.js`) does
+// its own rename on the way out.
 //
 //   {
 //     "type": "object",
@@ -19,12 +25,6 @@
 //     "properties": { ... per-arg JSON Schemas ... },
 //     "required": [ ... arg names ... ]
 //   }
-//
-// No provider-specific envelope is used here. `getToolManifest()` projects
-// the registry into a manifest suitable for any harness; thin adapter
-// layers (not shipped in this repo) can wrap it for OpenAI's
-// `{type:"function", function:{...}}`, Anthropic/MCP's `input_schema`
-// rename, etc.
 //
 // **Decision:** Tool descriptor shape — JSON Schema subset with
 // `name`/`description`/`parameters`/`execute`. **Tier:** T1.

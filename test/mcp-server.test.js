@@ -169,8 +169,12 @@ test('tools/list returns the harness-agnostic manifest without execute', async (
     for (const tool of response.result.tools) {
       assert.equal(typeof tool.name, 'string');
       assert.equal(typeof tool.description, 'string');
-      assert.equal(tool.parameters.type, 'object');
-      assert.equal(tool.parameters.additionalProperties, false);
+      // MCP wire format (2024-11-05) names the argument schema
+      // `inputSchema` (camelCase). The internal registry calls it
+      // `parameters`; the MCP server is the adapter that does the
+      // rename on the way out.
+      assert.equal(tool.inputSchema.type, 'object');
+      assert.equal(tool.inputSchema.additionalProperties, false);
       assert.equal(tool.execute, undefined, 'execute must not leak through the wire');
     }
     const names = response.result.tools.map((t) => t.name);
@@ -183,6 +187,79 @@ test('tools/list returns the harness-agnostic manifest without execute', async (
       'propose_skill_change',
     ]) {
       assert.ok(names.includes(expected), `manifest should include ${expected}`);
+    }
+  } finally {
+    try { handle?.stop(); } catch { /* ignore */ }
+    try { stdin.destroy(); } catch { /* ignore */ }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('tools/list manifests conform to the MCP 2024-11-05 wire format', async () => {
+  // Regression test for the bug where the manifest used `parameters`
+  // (the harness-agnostic name) instead of `inputSchema` (the MCP
+  // spec field name). MCP clients validate the response with a strict
+  // Zod schema and reject the response when `inputSchema` is missing
+  // or not an object.
+  const dir = makeTempDir('mineagent-mcp-wireshape-');
+  const { startMcpServer } = await import(pathToFileURL(serverPath).href);
+  const stdin = makeLineReadable();
+  const stdout = makeBufferedWritable();
+  let handle = null;
+  try {
+    handle = await startMcpServer({
+      shutdownExisting: false,
+      installCleanup: false,
+      input: stdin,
+      output: stdout,
+      pidfile: join(dir, 'pid'),
+    });
+    writeRequest(stdin, 7, 'tools/list');
+    await settle();
+    const response = findResponseById(parseLines(stdout.getBuffered()), 7);
+    assert.ok(response, 'tools/list should respond');
+    assert.ok(Array.isArray(response.result.tools), 'tools should be an array');
+    assert.ok(response.result.tools.length > 0, 'manifest should be non-empty');
+
+    // Re-parse the result as a fresh JSON value to make sure every
+    // field round-trips through the wire as a real object (not a
+    // function or undefined, which would survive an in-process
+    // assertion but fail when an MCP client validates the response).
+    const rehydrated = JSON.parse(JSON.stringify(response.result));
+    for (const tool of rehydrated.tools) {
+      // The MCP spec field is `inputSchema` (camelCase). It must be
+      // present and a real JSON Schema object — clients reject the
+      // whole manifest when this is missing or the wrong type.
+      assert.equal(
+        typeof tool.inputSchema,
+        'object',
+        `${tool.name}: inputSchema must be an object per MCP 2024-11-05`
+      );
+      assert.notEqual(tool.inputSchema, null, `${tool.name}: inputSchema must not be null`);
+      assert.equal(tool.inputSchema.type, 'object', `${tool.name}: inputSchema.type must be "object"`);
+      assert.equal(
+        tool.inputSchema.additionalProperties,
+        false,
+        `${tool.name}: inputSchema.additionalProperties must be false`
+      );
+      assert.equal(
+        typeof tool.inputSchema.properties,
+        'object',
+        `${tool.name}: inputSchema.properties must be an object`
+      );
+      assert.ok(
+        Array.isArray(tool.inputSchema.required),
+        `${tool.name}: inputSchema.required must be an array`
+      );
+
+      // The old `parameters` field must NOT appear on the wire.
+      // Internal callers continue to use `parameters`; the rename is
+      // a wire-format concern, not a registry rename.
+      assert.equal(
+        tool.parameters,
+        undefined,
+        `${tool.name}: the harness-agnostic \`parameters\` field must not appear on the MCP wire format`
+      );
     }
   } finally {
     try { handle?.stop(); } catch { /* ignore */ }
