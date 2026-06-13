@@ -5,27 +5,28 @@
 // offline-mode auth is supported; there is no path to online Mojang auth.
 
 import mineflayer from 'mineflayer';
-import { state, setStatus, snapshot, STATUS } from './state.js';
-
-const listeners = new Set();
+import {
+  state,
+  setStatus,
+  snapshot,
+  setPosition,
+  setHealth,
+  setInventory,
+  setCurrentTask,
+  recordChat,
+  recordAction,
+  resetRuntime,
+  markSessionStart,
+  STATUS,
+} from './state.js';
+import { emit, subscribe } from './events.js';
 
 export function getStatus() {
   return snapshot();
 }
 
 export function onEvent(listener) {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
-
-function emit(event, payload) {
-  for (const listener of listeners) {
-    try {
-      listener(event, payload);
-    } catch {
-      // listener errors must not break the connection loop
-    }
-  }
+  return subscribe(listener);
 }
 
 export async function connectToServer({
@@ -44,6 +45,7 @@ export async function connectToServer({
   state.config.port = port;
   state.config.username = username;
   setStatus(STATUS.CONNECTING);
+  emit('status', snapshot());
 
   return new Promise((resolve) => {
     let settled = false;
@@ -62,8 +64,18 @@ export async function connectToServer({
     state.bot = bot;
 
     bot.once('spawn', () => {
+      markSessionStart();
       setStatus(STATUS.CONNECTED);
+      setCurrentTask('idle');
       attachListeners(bot);
+      // The `bot.on('spawn', ...)` handler registered by attachListeners
+      // would fire for this same spawn and re-emit state; suppress the
+      // duplicate by calling setCurrentTask after attachListeners runs.
+      setCurrentTask('idle');
+      if (bot.entity) setPosition(bot.entity.position);
+      setHealth(bot.health);
+      setInventory(collectInventory(bot));
+      emit('status', snapshot());
       emit('connected', { host, port, username });
       finish({ ok: true, host, port, username });
     });
@@ -71,12 +83,14 @@ export async function connectToServer({
     bot.once('kicked', (reason) => {
       const message = `kicked: ${formatReason(reason)}`;
       setStatus(STATUS.ERROR, message);
+      emit('status', snapshot());
       emit('kicked', { reason: message });
       finish({ ok: false, error: message });
     });
 
     bot.once('error', (err) => {
       setStatus(STATUS.ERROR, err.message);
+      emit('status', snapshot());
       emit('error', { error: err.message });
       finish({ ok: false, error: err.message });
     });
@@ -85,7 +99,9 @@ export async function connectToServer({
       if (state.status !== STATUS.ERROR) {
         setStatus(STATUS.DISCONNECTED);
       }
+      resetRuntime();
       state.bot = null;
+      emit('status', snapshot());
       emit('end', {});
       // If the socket closes before spawn, the connect promise has not been
       // settled by spawn/kicked/error, so resolve it here to avoid hanging
@@ -98,14 +114,52 @@ export async function connectToServer({
 function attachListeners(bot) {
   bot.on('chat', (username, message) => {
     if (username === bot.username) return;
+    recordChat(username, message);
     emit('chat', { username, message });
   });
   bot.on('message', (jsonMsg) => {
-    emit('message', { text: jsonMsg.toString() });
+    const text = jsonMsg && typeof jsonMsg.toString === 'function'
+      ? jsonMsg.toString()
+      : '';
+    if (!text) return;
+    recordChat('server', text);
+    emit('message', { text });
   });
-  bot.on('kicked', (reason) => emit('kicked', { reason: formatReason(reason) }));
+  bot.on('kicked', (reason) =>
+    emit('kicked', { reason: formatReason(reason) })
+  );
   bot.on('error', (err) => emit('error', { error: err.message }));
   bot.on('end', () => emit('end', {}));
+
+  // Live state for the observer. These handlers may fire frequently; we
+  // emit a single 'state' snapshot rather than a flood of partial updates.
+  bot.on('move', () => {
+    if (!bot.entity) return;
+    setPosition(bot.entity.position);
+    emit('state', snapshot());
+  });
+  bot.on('health', () => {
+    setHealth(bot.health);
+    emit('state', snapshot());
+  });
+  // Inventory changes do not have a single named event in Mineflayer 4.x;
+  // the world-interaction skill pushes updates after it mutates inventory.
+  bot.inventory.on('updateSlot', () => {
+    setInventory(collectInventory(bot));
+    emit('state', snapshot());
+  });
+}
+
+function collectInventory(bot) {
+  if (!bot || !bot.inventory) return [];
+  const items = bot.inventory.items
+    ? bot.inventory.items()
+    : Array.from(bot.inventory.slots || []).filter(Boolean);
+  return items.map((item, idx) => ({
+    slot: item.slot ?? idx,
+    name: item.name,
+    count: item.count,
+  }));
 }
 
 function formatReason(reason) {
@@ -123,6 +177,7 @@ export function disconnectFromServer() {
   if (!bot) {
     if (state.status !== STATUS.DISCONNECTED) {
       setStatus(STATUS.DISCONNECTED);
+      emit('status', snapshot());
     }
     return { ok: true, alreadyDisconnected: true };
   }
@@ -133,6 +188,8 @@ export function disconnectFromServer() {
   }
   state.bot = null;
   setStatus(STATUS.DISCONNECTED);
+  resetRuntime();
+  emit('status', snapshot());
   return { ok: true };
 }
 
@@ -142,5 +199,8 @@ export function sendChat(message) {
     return { ok: false, error: 'not connected' };
   }
   bot.chat(message);
+  recordChat(bot.username, message);
+  recordAction('chat', message);
+  emit('state', snapshot());
   return { ok: true };
 }
