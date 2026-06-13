@@ -2,7 +2,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { tools, findTool } from '../src/tools/index.js';
+import { tools, findTool, findToolsByPrefix } from '../src/tools/index.js';
 import { state, STATUS } from '../src/state.js';
 
 const REQUIRED_TOOLS = [
@@ -13,9 +13,27 @@ const REQUIRED_TOOLS = [
   'ask_user_for_server',
 ];
 
+const NEW_TOOLS = [
+  'speak',
+  'shutdown',
+  'create_skill',
+  'create_script',
+  'write_memory',
+  'list_skills',
+  'list_scripts',
+  'list_memories',
+];
+
 test('all five vision-mandated connection tools are registered', () => {
   const names = tools.map((t) => t.name);
   for (const required of REQUIRED_TOOLS) {
+    assert.ok(names.includes(required), `missing tool: ${required}`);
+  }
+});
+
+test('new tools (speak, shutdown, self-improvement) are registered', () => {
+  const names = tools.map((t) => t.name);
+  for (const required of NEW_TOOLS) {
     assert.ok(names.includes(required), `missing tool: ${required}`);
   }
 });
@@ -34,6 +52,12 @@ test('every tool has a name, description, parameters, and execute function', () 
 test('findTool returns the matching tool or null', () => {
   assert.ok(findTool('connect_to_server'));
   assert.equal(findTool('does_not_exist'), null);
+});
+
+test('findToolsByPrefix returns tools that match the prefix', () => {
+  const list = findToolsByPrefix('list_');
+  assert.ok(list.length >= 3);
+  for (const t of list) assert.ok(t.name.startsWith('list_'));
 });
 
 test('connection_status returns ok=true with a known status', async () => {
@@ -69,4 +93,28 @@ test('ask_user_for_server returns a prompt', async () => {
   assert.equal(result.ok, true);
   assert.equal(typeof result.prompt, 'string');
   assert.ok(result.prompt.length > 0);
+});
+
+test('speak rejects empty text and accepts a string', async () => {
+  const tool = findTool('speak');
+  const empty = await tool.execute({ text: '' });
+  assert.equal(empty.ok, false);
+  const ok = await tool.execute({ text: 'hello' });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.text, 'hello');
+});
+
+test('self-improvement tools list empty workspace directories cleanly', async () => {
+  const listSkills = findTool('list_skills');
+  const listScripts = findTool('list_scripts');
+  const listMemories = findTool('list_memories');
+  const s = await listSkills.execute({});
+  const sc = await listScripts.execute({});
+  const m = await listMemories.execute({});
+  assert.equal(s.ok, true);
+  assert.equal(sc.ok, true);
+  assert.equal(m.ok, true);
+  assert.ok(Array.isArray(s.skills));
+  assert.ok(Array.isArray(sc.scripts));
+  assert.ok(Array.isArray(m.memories));
 });
