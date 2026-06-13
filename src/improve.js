@@ -22,6 +22,7 @@ const skillsDir = path.join(workspaceRoot, 'skills');
 const scriptsDir = path.join(workspaceRoot, 'scripts');
 const memoriesDir = path.join(workspaceRoot, 'memories');
 const lastServerFile = path.join(memoriesDir, 'last-server.json');
+const proposalsDir = path.join(memoriesDir, 'proposals');
 
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
@@ -45,6 +46,33 @@ export function createSkill({ name, body, kind = 'doc' } = {}) {
   const target = path.join(skillsDir, filename);
   fs.writeFileSync(target, body, 'utf8');
   return { ok: true, path: target };
+}
+
+export function updateSkill({ name, body, kind = 'doc' } = {}) {
+  // The persona is taught to call propose_skill_change first; this
+  // execute tool is the action the persona takes after the user has
+  // approved. For now, the implementation is identical to createSkill
+  // because the proposal system guarantees the agent does not call
+  // this for an existing skill it does not want to overwrite.
+  return createSkill({ name, body, kind });
+}
+
+export function removeSkill({ name, kind = 'doc' } = {}) {
+  const safe = safeName(name);
+  if (!safe) return { ok: false, error: 'name must be alphanumeric (a-z 0-9 _ -)' };
+  const filename = kind === 'code' ? `${safe}.js` : `${safe}.md`;
+  const target = path.join(skillsDir, filename);
+  try {
+    // `removed` is true only if the file actually existed and was
+    // deleted. A no-op call against a missing file returns removed=false.
+    const existed = fs.existsSync(target);
+    if (existed) {
+      fs.unlinkSync(target);
+    }
+    return { ok: true, path: target, removed: existed };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 }
 
 export function createScript({ name, body } = {}) {
@@ -165,4 +193,127 @@ export const paths = {
   scriptsDir,
   memoriesDir,
   lastServerFile,
+  proposalsDir,
 };
+
+// --- Proposal workflow --------------------------------------------------
+//
+// The persona's vision rule: committable modifications to
+// `workspace/skills/` and `workspace/scripts/` require explicit user
+// approval. The proposal workflow is the path that produces approval.
+//
+// A proposal is a small markdown file at
+// `workspace/memories/proposals/<name>-<timestamp>.md` describing the
+// change (action, summary, reason, body). The persona reads the
+// proposal back, asks the user in chat, and only then calls the
+// matching execute tool. Rejection deletes the proposal.
+//
+// Proposals are gitignored (memories is gitignored). The shutdown
+// commit does NOT promote proposals into skills/ or scripts/; that
+// path requires the execute tool after an in-session approval.
+
+const VALID_ACTIONS = new Set(['create', 'revise', 'remove', 'generalize']);
+
+function ensureProposalsDir() {
+  ensureDir(proposalsDir);
+}
+
+function proposalTimestamp() {
+  return new Date().toISOString().replace(/[:.]/g, '-');
+}
+
+export function proposeSkillChange({
+  name,
+  action,
+  body = '',
+  summary,
+  reason,
+  kind = 'doc',
+} = {}) {
+  const safe = safeName(name);
+  if (!safe) return { ok: false, error: 'name must be alphanumeric (a-z 0-9 _ -)' };
+  if (!VALID_ACTIONS.has(action)) {
+    return { ok: false, error: `action must be one of: ${[...VALID_ACTIONS].join(', ')}` };
+  }
+  if (action !== 'remove' && (typeof body !== 'string' || body.length === 0)) {
+    return { ok: false, error: 'body is required for create/revise/generalize' };
+  }
+  if (typeof summary !== 'string' || summary.length === 0) {
+    return { ok: false, error: 'summary is required' };
+  }
+  if (typeof reason !== 'string' || reason.length === 0) {
+    return { ok: false, error: 'reason is required' };
+  }
+  ensureProposalsDir();
+  const ts = proposalTimestamp();
+  const filename = `${safe}-${ts}.md`;
+  const target = path.join(proposalsDir, filename);
+  const frontmatter = [
+    '---',
+    `name: ${safe}`,
+    `action: ${action}`,
+    `kind: ${kind}`,
+    `proposedAt: ${new Date().toISOString()}`,
+    'status: proposed',
+    '---',
+    '',
+  ].join('\n');
+  const content = [
+    frontmatter,
+    `# Proposal: ${action} ${safe}`,
+    '',
+    '## Summary',
+    summary,
+    '',
+    '## Reason',
+    reason,
+    '',
+    '## Body',
+    body,
+    '',
+  ].join('\n');
+  fs.writeFileSync(target, content, 'utf8');
+  return {
+    ok: true,
+    path: target,
+    proposalId: filename.replace(/\.md$/, ''),
+    name: safe,
+    action,
+    chatPrompt:
+      `Hey, I think we should ${action} the ${safe} skill: ${summary}. ` +
+      `The reason is ${reason}. OK to proceed? (yes/no)`,
+  };
+}
+
+export function listProposals() {
+  return listDir(proposalsDir, ['.md']);
+}
+
+export function readProposal(proposalId) {
+  if (typeof proposalId !== 'string' || !/^[a-z0-9_\-]+$/i.test(proposalId)) {
+    return { ok: false, error: 'invalid proposalId' };
+  }
+  const target = path.join(proposalsDir, `${proposalId}.md`);
+  if (!fs.existsSync(target)) {
+    return { ok: false, error: 'proposal not found' };
+  }
+  try {
+    const text = fs.readFileSync(target, 'utf8');
+    return { ok: true, path: target, body: text };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export function rejectProposal(proposalId) {
+  if (typeof proposalId !== 'string' || !/^[a-z0-9_\-]+$/i.test(proposalId)) {
+    return { ok: false, error: 'invalid proposalId' };
+  }
+  const target = path.join(proposalsDir, `${proposalId}.md`);
+  try {
+    if (fs.existsSync(target)) fs.unlinkSync(target);
+    return { ok: true, rejected: true, path: target };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}

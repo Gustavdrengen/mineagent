@@ -155,16 +155,53 @@ Anything in `memories/` that turns out to be generally useful can be promoted in
 
 ## Self-Improvement
 
-MineAgent should be able to improve itself during operation.
+MineAgent should be able to improve itself during operation, but the bar for *committed* improvements is high. The playing agent does not own `workspace/` unilaterally; it shares that ownership with the user (another player in the world). The rules below govern what the agent may do on its own, and what it must consult about first.
+
+### Proactive learning
+
+The agent should be **actively curious** about its own performance. Whenever it encounters a situation that a future run of the same kind would also encounter, it should pause and ask itself: would a new tool, a new skill, or a revision of an existing one make this faster, safer, or more reliable next time?
 
 Examples:
 
-- create a script for a repeated action
-- create a new skill when a task deserves a proper reusable workflow
-- write notes in `memories/` for future runs of the same session
-- add diagnostics if something is hard to observe
+- The agent has to navigate parkour to reach a goal. It notices it improvises a different jump pattern every time. → Propose a `parkour` skill that codifies the pattern so future runs start with it.
+- The agent repeats the same `pathfind + dig` sequence to escape caves. → Propose a `cave-escape` script that captures the sequence.
+- The agent finds a skill that omits a tool it should reference. → Propose a `revise` of the skill to add the missing tool reference.
+- The agent notices a skill that is over-specific to a single build or server layout. → Propose to `generalize` or `remove` it.
 
-The agent should not need human intervention for every small improvement.
+The user is the agent's partner in this loop, not its auditor. Proposing is encouraged; proposing well is the skill.
+
+### Consult before commit
+
+Committed modifications to `workspace/skills/` and `workspace/scripts/` are **shared state** — they are the persistent library that survives across runs and across servers. The agent does not get to mutate that library on its own.
+
+The flow is:
+
+1. The agent calls `propose_skill_change` with the proposed change (create, revise, remove, or generalize), a `summary` of the change in plain language, and a `reason` explaining the learning opportunity.
+2. The proposal is written to `memories/proposals/<name>-<timestamp>.md` (gitignored). The tool returns a chat-prompt string the agent can use to ask the user in-world.
+3. The agent describes the proposal to the user via chat (in-character) and waits for an explicit yes/no.
+4. On approval, the agent calls the appropriate execute tool (`create_skill`, `update_skill`, `remove_skill`). On rejection, the agent calls `reject_proposal` and the proposal is deleted.
+
+The shutdown handler does **not** auto-promote anything from `memories/proposals/` into `skills/` or `scripts/`. The only path from proposal to commit is an explicit user approval in the same session (or a follow-up session that finds the proposal and asks the user again). Anything left in `memories/proposals/` at shutdown is preserved as a memory and not auto-committed.
+
+### World-agnostic skills
+
+All skills and tools must be **world-agnostic** — they should be useful on any offline-mode Minecraft server, in any build, in any biome. Skills that are specific to a single server, a single player base, a single build (e.g., "build a prismarine tower at coordinates X,Y,Z") are anti-patterns and must be either generalized or removed.
+
+When proposing a new skill, the agent must answer the question: would this skill help a MineAgent persona that has never seen this server? If no, generalize or do not propose.
+
+When proposing a revision, the agent must consider whether the existing skill has drifted toward server-specificity. If so, the revision should generalize it.
+
+### Skill maintenance
+
+The agent's responsibility does not end at creation. Every run is also a maintenance pass. On a regular cadence (and especially before shutdown), the agent should:
+
+- **Audit** each existing skill for staleness. If a tool the skill references has been renamed, removed, or its `error.kind` table has changed, propose a `revise`.
+- **Audit** each existing skill for over-specificity. If a skill's example or description is tied to one server, one build, or one coordinate set, propose to `generalize` it (rewrite with abstract references) or `remove` it.
+- **Audit** each existing skill for missing relevant references. If a workflow skill could usefully mention a tool the persona has, propose a `revise`. This is a soft trigger, not a hard rule: not every skill needs tool references, and the agent should skip this audit for skills that are pure description, etiquette, or context.
+
+The maintenance pass is part of the persona's normal loop, not a separate task. The agent runs it at the end of any session in which it created or used skills.
+
+Note: not every skill needs to mention a tool. Some skills are pure descriptions of player behavior, etiquette, or context that don't map to a single tool. The agent should use judgment: a workflow skill about parkour, mining, or pathing may benefit from referencing the relevant tool; a skill about chat tone or roleplay probably does not. The maintenance trigger is *would the skill be more useful with a small change*, not *must every skill look like a tool reference page*.
 
 ## Chat and Voice
 
@@ -241,3 +278,5 @@ MineAgent succeeds if it can:
 - expose its tool palette in a harness-agnostic manifest that any LLM harness can consume
 - boot the in-world persona through a single `startPersona()` entry point
 - classify every connection failure into a stable `error.kind` the agent can branch on
+- propose (never unilaterally commit) changes to its shared `skills/` and `scripts/` libraries, after consulting the user
+- keep its `skills/` and `scripts/` world-agnostic and up to date with the tools it has

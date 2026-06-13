@@ -157,28 +157,24 @@ What is "there" but feels bad to use:
 - The five connection tools are plain functions, not a discoverable registry with descriptions. They will need a tool-spec surface once an agent loop is added.
 - `connection.js` mixes Mineflayer event handling with our state machine; the boundary will benefit from a thin adapter once the agent loop is added.
 
-### 2026-06-13 — harness-agnostic tool surface, error.kind classification, startPersona, last-known-server memory
+### 2026-06-13 — consult-before-commit self-improvement, proposal workflow, world-agnostic skills, maintenance pass
 
 What works:
-- Tool registry now exposes a harness-agnostic manifest: `getToolManifest()` returns `{ name, description, parameters }` for each tool with a strict JSON Schema subset (`type`, `properties`, `required`, `additionalProperties: false`). No provider-specific envelope. Any LLM harness can consume the manifest and route calls through `callTool(name, args)`.
-- New `callTool(name, args)` is the single harness-facing entry point. Unknown names return `kind: 'unknown_tool'` with a `hint` listing registered tools. Throwing tools return `kind: 'execution_error'`.
-- New tools: `connect_to_last_known_server`, `forget_last_server`. The full set is 15 tools.
-- `connectToServer` now classifies every failure into a stable `error.kind` (`unreachable`, `refused`, `timeout`, `auth_required`, `version_mismatch`, `not_whitelisted`, `kicked`, `no_host`, `already_connecting`, `unknown`). The persona loop can branch on `kind` rather than the raw `error` string.
-- Last-known server memory at `workspace/memories/last-server.json` (gitignored). Every connect attempt (success or failure) updates it. `connect_to_last_known_server` reads it and reconnects.
-- New `src/persona.js` exposes `startPersona({ host?, port?, username?, goal?, prompt?, attachChat? })` — a single programmatic entry point that returns a wired-up manifest, attaches the chat listener, and resolves a server from `arg > memory > prompt > none`.
-- CLI (`src/index.js`) is now a thin readline wrapper around `startPersona`. New `--print-manifest` flag outputs the tool manifest as JSON.
-- `specs/tools.md` is the new canonical tool contract (shape, error kinds, harness adapter map). `specs/connection.md` is updated with the new `error.kind` table.
-- `VISION.md` documents the harness-agnostic surface and adds new success criteria.
-- `workspace/AGENTS.md` is updated with the new tools and the diagnose-on-failure flow.
-- 101 tests passing (`npm test`). Smoke check OK (`npm run smoke`).
-- A rogue commit (8e1491d) that introduced an unrequested skill file was dropped from history; the file was erased and all stale doc references were removed.
+- `propose_skill_change` is the only entry point for committed modifications to `workspace/skills/` and `workspace/scripts/`. The tool writes a structured proposal to `memories/proposals/<name>-<timestamp>.md` (gitignored) and returns a `chatPrompt` string the persona echoes in chat to the user.
+- After explicit user approval in chat, the persona calls the matching execute tool: `create_skill`, `update_skill`, `remove_skill`, or `create_script`. On rejection, `reject_proposal` marks the proposal (or `read_proposal` + manual review) is the diagnostic path.
+- New helpers: `list_proposals`, `read_proposal`, `reject_proposal`. All under the harness-agnostic tool manifest.
+- `create_skill` and `create_script` descriptions now warn the LLM that they are committed modifications requiring prior `propose_skill_change` + user approval.
+- `removeSkill` returns `removed: true` only if the file actually existed. No-op calls against missing files return `removed: false`.
+- `writeLastServer` is the only writer of `memories/last-server.json` (called from `connectToServer` in connection.js). Empty string host/port/username are no-ops, not wipes.
+- VISION.md, workspace/AGENTS.md, and specs/tools.md are consistent on the new rules: proactive learning, consult-before-commit, world-agnostic skills, and a maintenance pass with priority `staleness → over-specificity → optional tool-reference additions` (the last is a soft judgment call, not a hard rule).
+- 114 tests passing (`npm test`). Smoke check OK (`npm run smoke`).
+- Codebase clean: no dangling references, all references to the deleted `diagnose-connection.md` are gone.
 
 What is broken / rough / missing in a way a user would notice:
-- A live offline-mode server is still required to actually exercise `connect_to_server` end-to-end. The test suite covers the resolution, classification, manifest, and tool surfaces, but not the protocol layer.
-- The browser observer (`server/`, `ui/`) is still the bootstrap static page; live state streaming remains a follow-up.
-- `startPersona` is in-process only. A future MCP or remote harness wrapper would need an adapter that maps the manifest to the provider envelope and forwards `callTool` invocations.
+- The persona has no `!approve <name>` / `!reject <name>` chat command yet, and no smalltalk yes/no route. The user has to respond to the proposal in chat in a way the persona can interpret; for LLM-driven loops this is natural, for the CLI's deterministic `runGoal` path the user has to phrase the approval as a free-text reply that the agent loop can match.
+- The shutdown handler still auto-commits anything in `workspace/skills/` and `workspace/scripts/`. The new rule says committed modifications require user approval; the auto-commit path is now in tension with that. A follow-up should make shutdown only commit files that have a matching approved proposal.
+- `propose_skill_change` returns a `chatPrompt` string but does not itself emit a chat event. The persona has to remember to call `sendChat` afterward (or the new flow can grow a thin emit wrapper inside the tool).
 
 What is "there" but feels bad to use:
-- The `classifyKickReason` function matches server kick reasons with exact regexes (`outdated client`, `incompatible protocol`, `client version`). Servers that phrase their kick reasons differently will fall through to `KICKED` and need manual triage by the persona.
-- `startPersona` mutates `state.config.host/port/username` even when the resolved value came from memory or a prompt. That keeps the config in sync with the current connection, but it means subsequent `state.config.*` reads reflect the last connect, not the bootstrap defaults.
-- The error-state test for `callTool` mutates `tools[0].execute` in place. That is the cleanest way to force a throw without adding a fixture registry, but it does depend on `tools` being a mutable array — which it is, by design, so future tools can be hot-registered.
+- The dynamic import in two of the new `update_skill` / `remove_skill` tests is redundant with the top-level static import in test/tools.test.js. Stylistic, not a bug.
+- The new tests duplicate the `test('cleanup', ...)` pattern at the end of test/tools.test.js. Node's runner runs both; not a failure, but cleaner would be a single shared cleanup.

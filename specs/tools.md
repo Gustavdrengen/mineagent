@@ -63,12 +63,45 @@ The user-facing API in MineAgent is just `getToolManifest()` and `callTool(name,
 | `forget_last_server` | Clear the remembered server. |
 | `speak` | Trigger a TTS voice event through the browser observer. |
 | `shutdown` | Stop the bot, write a session summary, attempt a commit. |
-| `create_skill` | Write a file into `workspace/skills/`. |
-| `create_script` | Write a file into `workspace/scripts/`. |
+| `propose_skill_change` | **Start a committable change.** Writes to `memories/proposals/`, returns a `chatPrompt` to ask the user. |
+| `list_proposals` | List pending proposals in `memories/proposals/`. |
+| `read_proposal` | Read a proposal's full markdown body. |
+| `reject_proposal` | Delete a proposal the user has rejected. |
+| `create_skill` | **Committed change.** Only call after `propose_skill_change` and explicit user approval. |
+| `update_skill` | **Committed change.** Replace the body of an existing skill. Same approval rule. |
+| `remove_skill` | **Committed change.** Delete a skill. Same approval rule. |
+| `create_script` | **Committed change.** Write a helper script. Same approval rule. |
 | `write_memory` | Write a note into `workspace/memories/` (gitignored). |
 | `list_skills` | List files in `workspace/skills/`. |
 | `list_scripts` | List files in `workspace/scripts/`. |
 | `list_memories` | List files in `workspace/memories/`. |
+
+## Committable-change flow
+
+`workspace/skills/` and `workspace/scripts/` are shared state. The persona does not modify them on its own. The only path from intent to commit is:
+
+```
+1. propose_skill_change(name, action, body, kind, summary, reason)
+     -> writes memories/proposals/<name>-<ts>.md
+     -> returns { chatPrompt }
+2. Persona asks the user in chat using the returned chatPrompt.
+3a. On approval:
+      create_skill | update_skill | remove_skill | create_script
+3b. On rejection:
+      reject_proposal(proposalId)
+```
+
+Rules:
+
+- Every `create_*` / `update_*` / `remove_*` tool is a **committed modification**. The persona must always precede it with a `propose_skill_change` call and an explicit user approval in chat.
+- The `action` parameter on `propose_skill_change` is one of `create`, `revise`, `remove`, `generalize`. The persona uses `revise` or `generalize` for maintenance updates to existing skills; the matching execute tool is `update_skill` (which overwrites the body).
+- Proposals are gitignored (under `memories/`). The shutdown handler does **not** auto-promote proposals into `skills/` or `scripts/`; that path requires the execute tool after an in-session approval.
+- All skills and tools must be **world-agnostic** — useful on any offline-mode Minecraft server, in any build, in any biome. Over-specific skills (e.g., "build a prismarine tower at coordinates X,Y,Z on server FOO") must be generalized or removed via the proposal flow.
+- Maintenance triggers, in priority order: **staleness → over-specificity → optional tool-reference additions**. Staleness and over-specificity are always worth proposing. Tool-reference additions are a soft judgment call, not a hard rule: skills about chat tone, roleplay, etiquette, or pure context do not need tool references and the agent should skip that audit for them.
+
+## Error kinds
+
+Stable, defined in `src/connection.js` (`ERROR_KIND`) and the tool-level helpers.
 
 ## Result envelope
 

@@ -44,6 +44,8 @@ import { speak } from '../speak.js';
 import { shutdown, writeSessionSummary, commitImprovements } from '../shutdown.js';
 import {
   createSkill,
+  updateSkill,
+  removeSkill,
   createScript,
   writeMemory,
   readLastServer,
@@ -51,6 +53,10 @@ import {
   listSkills,
   listScripts,
   listMemories,
+  proposeSkillChange,
+  listProposals,
+  readProposal,
+  rejectProposal,
 } from '../improve.js';
 import { subscribe } from '../events.js';
 
@@ -234,7 +240,12 @@ export const tools = [
     name: 'create_skill',
     description:
       'Write a new file into workspace/skills/. Use kind="code" to ' +
-      'write a .js file, kind="doc" (default) to write a .md file.',
+      'write a .js file, kind="doc" (default) to write a .md file. ' +
+      '**This is a committed modification to shared state. The persona ' +
+      'must call `propose_skill_change` first, get the user\'s explicit ' +
+      'approval in chat, and only then call this tool.** Skills must ' +
+      'be world-agnostic (useful on any offline-mode server) and not ' +
+      'tied to a single build, biome, or coordinate set.',
     parameters: buildParameters({
       name: PARAM.string(
         'Alphanumeric name for the skill (a-z 0-9 _ -).',
@@ -249,8 +260,130 @@ export const tools = [
       createSkill({ name, body, kind }),
   },
   {
+    name: 'update_skill',
+    description:
+      'Replace the body of an existing skill in workspace/skills/. ' +
+      '**This is a committed modification to shared state. The persona ' +
+      'must call `propose_skill_change` with action=revise or ' +
+      'action=generalize first, get the user\'s explicit approval in ' +
+      'chat, and only then call this tool.** Use this when a skill ' +
+      'has drifted toward server-specificity, is missing a tool ' +
+      'reference, or describes a workflow whose underlying tools have ' +
+      'changed.',
+    parameters: buildParameters({
+      name: PARAM.string(
+        'Alphanumeric name of the skill to update.',
+        { required: true }
+      ),
+      body: PARAM.string('New file body to write.', { required: true }),
+      kind: PARAM.string('"doc" (default) or "code".', {
+        enum: ['doc', 'code'],
+      }),
+    }),
+    execute: async ({ name, body, kind } = {}) =>
+      updateSkill({ name, body, kind }),
+  },
+  {
+    name: 'remove_skill',
+    description:
+      'Delete a skill from workspace/skills/. **This is a committed ' +
+      'modification to shared state. The persona must call ' +
+      '`propose_skill_change` with action=remove first, get the user\'s ' +
+      'explicit approval in chat, and only then call this tool.** Use ' +
+      'this when a skill is over-specific to a single server or build, ' +
+      'or when it has been fully superseded by another skill.',
+    parameters: buildParameters({
+      name: PARAM.string(
+        'Alphanumeric name of the skill to remove.',
+        { required: true }
+      ),
+      kind: PARAM.string('"doc" (default) or "code".', {
+        enum: ['doc', 'code'],
+      }),
+    }),
+    execute: async ({ name, kind } = {}) => removeSkill({ name, kind }),
+  },
+  {
+    name: 'propose_skill_change',
+    description:
+      'Write a proposal to memories/proposals/ and return a chat-prompt ' +
+      'string the persona can use to ask the user for approval. **This ' +
+      'is the only way to start a committable change.** The proposal is ' +
+      'gitignored; it never reaches skills/ or scripts/ on its own. ' +
+      'The persona must use the returned `chatPrompt` to ask the user ' +
+      'in chat, and only on explicit approval call `create_skill`, ' +
+      '`update_skill`, or `remove_skill`. All skills must be ' +
+      'world-agnostic — the `reason` field should explain the learning ' +
+      'opportunity, not the specific server or build.',
+    parameters: buildParameters({
+      name: PARAM.string(
+        'Alphanumeric skill name the proposal refers to (a-z 0-9 _ -).',
+        { required: true }
+      ),
+      action: PARAM.string(
+        'The kind of change being proposed.',
+        { required: true, enum: ['create', 'revise', 'remove', 'generalize'] }
+      ),
+      body: PARAM.string(
+        'Proposed new body for the skill. Required for create/revise/generalize; ignored for remove.'
+      ),
+      kind: PARAM.string('"doc" (default) or "code".', {
+        enum: ['doc', 'code'],
+      }),
+      summary: PARAM.string(
+        'One-sentence plain-language description of the change.',
+        { required: true }
+      ),
+      reason: PARAM.string(
+        'One- or two-sentence explanation of the learning opportunity that motivated the proposal.',
+        { required: true }
+      ),
+    }),
+    execute: async ({ name, action, body, kind, summary, reason } = {}) =>
+      proposeSkillChange({ name, action, body, kind, summary, reason }),
+  },
+  {
+    name: 'list_proposals',
+    description:
+      'List pending skill-change proposals in memories/proposals/. Use ' +
+      'this during a maintenance pass or to find a proposal the user ' +
+      'has not yet responded to.',
+    parameters: buildParameters({}),
+    execute: async () => ({ ok: true, proposals: listProposals() }),
+  },
+  {
+    name: 'read_proposal',
+    description:
+      'Read the full markdown body of a pending proposal by its ' +
+      'proposalId (the filename without .md).',
+    parameters: buildParameters({
+      proposalId: PARAM.string('Proposal id (filename without .md).', {
+        required: true,
+      }),
+    }),
+    execute: async ({ proposalId } = {}) => readProposal(proposalId),
+  },
+  {
+    name: 'reject_proposal',
+    description:
+      'Delete a pending proposal. Use this when the user has ' +
+      'explicitly rejected the change. The proposal is removed from ' +
+      'memories/proposals/; no commit ever happens.',
+    parameters: buildParameters({
+      proposalId: PARAM.string('Proposal id (filename without .md).', {
+        required: true,
+      }),
+    }),
+    execute: async ({ proposalId } = {}) => rejectProposal(proposalId),
+  },
+  {
     name: 'create_script',
-    description: 'Write a helper script into workspace/scripts/.',
+    description:
+      'Write a helper script into workspace/scripts/. **This is a ' +
+      'committed modification to shared state. The persona must call ' +
+      '`propose_skill_change` first, get the user\'s explicit ' +
+      'approval in chat, and only then call this tool.** Scripts must ' +
+      'be world-agnostic and not tied to a single server layout.',
     parameters: buildParameters({
       name: PARAM.string(
         'Alphanumeric name for the script (a-z 0-9 _ -).',

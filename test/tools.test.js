@@ -21,6 +21,11 @@ import {
   readLastServer,
   writeLastServer,
   clearLastServer,
+  proposeSkillChange,
+  listProposals,
+  readProposal,
+  rejectProposal,
+  removeSkill,
 } from '../src/improve.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -330,4 +335,174 @@ test('classifySocketError maps Node err codes to stable kinds', async () => {
 
 test('cleanup', () => {
   cleanup();
+});
+
+// --- Committable-change proposal flow ----------------------------------
+
+const proposalsDir = path.join(repoRoot, 'workspace', 'memories', 'proposals');
+
+function cleanProposals() {
+  if (fs.existsSync(proposalsDir)) {
+    for (const f of fs.readdirSync(proposalsDir)) {
+      if (f.endsWith('.md')) fs.unlinkSync(path.join(proposalsDir, f));
+    }
+  }
+}
+
+test('propose_skill_change writes a proposal and returns a chatPrompt', () => {
+  cleanProposals();
+  const r = proposeSkillChange({
+    name: 'parkour',
+    action: 'create',
+    body: '## Parkour\n\nWalk one block, jump, walk one block.',
+    kind: 'doc',
+    summary: 'Codify the basic parkour jump pattern.',
+    reason: 'I improvised the same jump pattern three times in a row.',
+  });
+  assert.equal(r.ok, true);
+  assert.ok(r.path);
+  assert.ok(r.proposalId);
+  assert.equal(r.name, 'parkour');
+  assert.equal(r.action, 'create');
+  assert.match(r.chatPrompt, /Hey, I think we should create the parkour skill/);
+  assert.match(r.chatPrompt, /yes\/no/);
+  assert.ok(fs.existsSync(r.path));
+  cleanProposals();
+});
+
+test('propose_skill_change rejects missing summary or reason', () => {
+  cleanProposals();
+  const r1 = proposeSkillChange({
+    name: 'x',
+    action: 'create',
+    body: 'body',
+    reason: 'reason',
+  });
+  assert.equal(r1.ok, false);
+  assert.match(r1.error, /summary/);
+  const r2 = proposeSkillChange({
+    name: 'x',
+    action: 'create',
+    body: 'body',
+    summary: 'summary',
+  });
+  assert.equal(r2.ok, false);
+  assert.match(r2.error, /reason/);
+});
+
+test('propose_skill_change rejects an invalid action', () => {
+  const r = proposeSkillChange({
+    name: 'x',
+    action: 'obliterate',
+    body: 'body',
+    summary: 's',
+    reason: 'r',
+  });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /action must be one of/);
+});
+
+test('propose_skill_change requires body for create/revise/generalize', () => {
+  const r = proposeSkillChange({
+    name: 'x',
+    action: 'revise',
+    summary: 's',
+    reason: 'r',
+  });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /body is required/);
+});
+
+test('propose_skill_change allows no body for remove', () => {
+  cleanProposals();
+  const r = proposeSkillChange({
+    name: 'prismarine-tower',
+    action: 'remove',
+    summary: 'Remove the over-specific prismarine-tower skill.',
+    reason: 'Tied to one server and one coordinate set.',
+  });
+  assert.equal(r.ok, true);
+  cleanProposals();
+});
+
+test('list_proposals and read_proposal round-trip', () => {
+  cleanProposals();
+  const r = proposeSkillChange({
+    name: 'round-trip',
+    action: 'create',
+    body: '## Body',
+    summary: 's',
+    reason: 'r',
+  });
+  assert.equal(r.ok, true);
+  const list = listProposals();
+  assert.ok(list.some((p) => p.endsWith(`${r.proposalId}.md`)));
+  const read = readProposal(r.proposalId);
+  assert.equal(read.ok, true);
+  assert.match(read.body, /action: create/);
+  assert.match(read.body, /status: proposed/);
+  cleanProposals();
+});
+
+test('reject_proposal deletes the file', () => {
+  cleanProposals();
+  const r = proposeSkillChange({
+    name: 'will-reject',
+    action: 'create',
+    body: 'b',
+    summary: 's',
+    reason: 'r',
+  });
+  assert.equal(r.ok, true);
+  assert.ok(fs.existsSync(r.path));
+  const rej = rejectProposal(r.proposalId);
+  assert.equal(rej.ok, true);
+  assert.equal(rej.rejected, true);
+  assert.equal(fs.existsSync(r.path), false);
+});
+
+test('read_proposal rejects invalid id', () => {
+  assert.equal(readProposal('../etc/passwd').ok, false);
+  assert.equal(readProposal('not a slug').ok, false);
+});
+
+test('reject_proposal rejects invalid id', () => {
+  assert.equal(rejectProposal('../etc/passwd').ok, false);
+});
+
+test('update_skill overwrites an existing skill', async () => {
+  // Use a temp name to avoid clobbering the committed skills.
+  const skills = await import('../src/improve.js');
+  const before = 'old body';
+  const after = 'new body';
+  skills.createSkill({ name: 'temp-skill', body: before, kind: 'doc' });
+  const target = path.join(repoRoot, 'workspace', 'skills', 'temp-skill.md');
+  assert.ok(fs.existsSync(target));
+  const r = skills.updateSkill({ name: 'temp-skill', body: after, kind: 'doc' });
+  assert.equal(r.ok, true);
+  const text = fs.readFileSync(target, 'utf8');
+  assert.equal(text, after);
+  fs.unlinkSync(target);
+});
+
+test('remove_skill deletes an existing skill', async () => {
+  const skills = await import('../src/improve.js');
+  skills.createSkill({ name: 'temp-skill-remove', body: 'b', kind: 'doc' });
+  const target = path.join(repoRoot, 'workspace', 'skills', 'temp-skill-remove.md');
+  assert.ok(fs.existsSync(target));
+  const r = removeSkill({ name: 'temp-skill-remove' });
+  assert.equal(r.ok, true);
+  assert.equal(r.removed, true);
+  assert.equal(fs.existsSync(target), false);
+});
+
+test('remove_skill returns ok for a missing skill (no-op)', () => {
+  const r = removeSkill({ name: 'never-existed' });
+  assert.equal(r.ok, true);
+  assert.equal(r.removed, false);
+});
+
+test('cleanup', () => {
+  cleanup();
+  cleanProposals();
 });
