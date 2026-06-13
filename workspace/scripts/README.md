@@ -1,13 +1,14 @@
 # Scripts
 
-On-demand helper scripts the MineAgent playing agent can create when a task is too small for a skill but too repetitive to keep re-deriving.
+Reusable helpers the MineAgent playing agent writes for tasks that are more specific than skills. A script might track state across multiple actions (for example, counting blocks placed while building), run a multi-step calculation, or coordinate a sequence of tool calls.
 
-A script is more temporary and more specific than a skill. If a script turns out to be generally useful across sessions, it gets promoted into `../skills/`.
+Scripts are committed and permanent, like skills — they are not temporary. The difference from skills is granularity and purpose: a skill describes what to do in a general situation, a script describes how to do a specific thing repeatedly. A script does not get promoted into `../skills/`; it stays a script. Skills and scripts are peers, not a hierarchy.
 
 Examples of script-shaped work:
 
-- a one-off refactor of a chunk of `../src/` that the agent needs to coordinate with
+- a block-placement tracker that logs every `place_block` call and reports a summary
+- a chat-log analyzer for a specific conversation pattern
 - a coordinate-harvesting run over a known region
-- a chat-log analyzer for a specific server's format
+- a maintenance routine that scans skills for staleness and proposes revisions
 
-Anything committed here should still be readable, self-contained, and safe to run.
+Anything committed here should still be readable, self-contained, world-agnostic, and safe to run.

@@ -22,7 +22,7 @@ MineAgent/                  repository root
 ├── workspace/              playing agent's home
 │   ├── AGENTS.md           runtime operating instructions for the playing agent
 │   ├── skills/             reusable behavior units (markdown)
-│   ├── scripts/            on-demand helper scripts
+│   ├── scripts/            reusable helpers (more specific than skills)
 │   └── memories/           gitignored run-local notes
 ├── docs/                   explanatory material
 └── .runtime/               gitignored runtime artifacts

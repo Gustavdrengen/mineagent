@@ -135,7 +135,7 @@ MineAgent's playing agent lives in a dedicated workspace subdirectory. The rest 
         start-mcp.sh            <- starts the MCP server (idempotent)
         .agents/mcp.json        <- MCP server config
         skills/                 <- reusable behaviors
-        scripts/                <- on-demand helpers
+        scripts/                <- reusable helpers (more specific than skills)
         memories/               <- run-local notes (gitignored)
 
 `workspace/` is the playing agent's home. That is where the agent runs from, and that is where it reads its instructions and stores its working files. Keeping the playing agent in its own subdirectory keeps it self-contained and independent of the supporting code.
@@ -152,7 +152,7 @@ Starting contents:
   - chat handling (read chat, respond in chat, parse simple commands)
   - basic world interaction (look at block, mine a block by name, place a block)
   - status reporting (inventory, health, position, current task)
-- `scripts/` — empty, ready for helper scripts the agent may create
+- `scripts/` — empty, ready for reusable helpers the agent may create
 - `memories/` — empty, ready for session notes (not committed); includes `last-server.json` for persistent server memory
 
 The agent should not need a long checklist of pre-baked content. It should start lean and grow skills and scripts on demand. New personas or specialized agents can be added later as additional skills that bundle prompts, tools, and behaviors.
@@ -180,7 +180,7 @@ Anything that grows there is local to the run that produced it. The committed sk
 
 Skills are the main reusable behavior units. They should be easy for the agent to discover and use. A skill can also bundle a full persona or specialized agent (prompt, tools, and behavior) so MineAgent can host more than one role over time.
 
-Scripts are smaller, more temporary helpers that the agent can create on demand for repetitive or awkward tasks.
+Scripts are reusable helpers for tasks that are more specific than skills. A script might track state across multiple actions (for example, counting blocks placed while building), run a multi-step calculation, or coordinate a sequence of tool calls that is too narrow for a general-purpose skill. Scripts are committed and permanent, just like skills — they are not temporary. The difference from skills is granularity and purpose: a skill describes what to do in a general situation, a script describes how to do a specific thing repeatedly. Scripts are peers of skills, not a lower tier.
 
 Anything in `memories/` that turns out to be generally useful can be promoted into a skill or a script. Promotion is what makes something worth keeping long-term; anything that stays in `memories/` is local to the run that produced it.
 

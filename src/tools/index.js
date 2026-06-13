@@ -410,7 +410,7 @@ export const tools = [
   },
   {
     name: 'create_script',
-    description: 'Write a helper script into workspace/scripts/. Committed modification; requires propose_skill_change + user approval first.',
+    description: 'Write a reusable helper into workspace/scripts/. Committed modification; requires propose_skill_change + user approval first.',
     parameters: buildParameters({
       name: PARAM.string('Alphanumeric name (a-z 0-9 _ -).', { required: true }),
       body: PARAM.string('File body to write.', { required: true }),

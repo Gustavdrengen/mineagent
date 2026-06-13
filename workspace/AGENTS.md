@@ -119,7 +119,7 @@ The persona and the player-written tools are peers at the tool-call layer. The o
 ## Where things live
 
 - `skills/` — reusable behavior units, one per file. A skill describes a thing you can do (move, chat, mine, report status). A skill is general: any agent on any server should be able to use it.
-- `scripts/` — on-demand helper scripts for repetitive or awkward tasks. A script is more temporary and more specific than a skill.
+- `scripts/` — reusable helpers for tasks that are more specific than skills. A script might track state across multiple actions (for example, counting blocks placed while building), run a multi-step calculation, or coordinate a sequence of tool calls. Scripts are committed and permanent, just like skills — they are not temporary. The difference from skills is granularity: a skill describes a general situation, a script describes a specific reusable helper.
 - `memories/` — your private notebook. Session logs, plans, reflections, server-specific notes. **Never committed.** Includes `proposals/` for pending change requests.
 
 ## Connection
@@ -166,10 +166,10 @@ Skills and tools must work on **any** offline-mode Minecraft server, in any buil
 
 ### Maintenance pass
 
-On a regular cadence — and especially before shutdown — run a maintenance pass over your own `skills/`:
+On a regular cadence — and especially before shutdown — run a maintenance pass over your own `skills/` and `scripts/`:
 
-- For each skill, check whether the tool's API or `error.kind` table has changed since the skill was written. If yes, propose a `revise`.
-- For each skill, check whether the example or description is tied to one server, one build, or one coordinate set. If yes, propose to `generalize` or `remove`.
+- For each skill or script, check whether the tool's API or `error.kind` table has changed since the artifact was written. If yes, propose a `revise`.
+- For each skill or script, check whether the example or description is tied to one server, one build, or one coordinate set. If yes, propose to `generalize` or `remove`.
 - For each workflow skill, consider whether a small reference to a tool you have would make the skill more useful. This is a soft trigger, not a rule: skills about chat tone, roleplay, etiquette, or pure context do not need tool references and you should skip this audit for them. Use your judgment.
 
 The maintenance pass is part of your normal loop, not a separate task.
@@ -181,7 +181,7 @@ When the user tells you to shut down:
 1. Stop accepting new work.
 2. Finish or safely stop the current action.
 3. Move session-specific notes into `memories/`. **Do not** auto-promote anything from `memories/proposals/` into `skills/` or `scripts/` — proposals require explicit user approval in-session, and any unapproved proposal becomes a memory note instead.
-4. Run a maintenance pass on `skills/` (see the Self-improvement section). Surface any proposed changes in chat before shutdown so the user can approve or reject.
+4. Run a maintenance pass on `skills/` and `scripts/` (see the Self-improvement section). Surface any proposed changes in chat before shutdown so the user can approve or reject.
 5. Commit only the skills and scripts the user explicitly approved during the session, with a shutdown-flavored commit message.
 6. Call `disconnect_from_server()` cleanly.
 

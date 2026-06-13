@@ -29,7 +29,7 @@ The connection state machine has five states: `disconnected`, `connecting`, `con
 - `server/index.js` — observer HTTP server. Reads state; does not write it.
 - `workspace/AGENTS.md` — runtime persona and decision loop.
 - `workspace/skills/` — reusable behaviors.
-- `workspace/scripts/` — on-demand helpers.
+- `workspace/scripts/` — reusable helpers (more specific than skills).
 - `workspace/memories/` — run-local notes (gitignored).
 
 ## Non-goals
