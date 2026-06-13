@@ -12,15 +12,21 @@ import {
   shutdown,
 } from '../src/shutdown.js';
 import { paths } from '../src/improve.js';
+import { trackMemory } from './_memories-cleanup.js';
 
 test('writeSessionSummary writes a markdown file into memories/', () => {
   const r = writeSessionSummary({ goal: 'test goal', exitReason: 'unit test' });
-  assert.equal(r.ok, true);
-  assert.ok(fs.existsSync(r.path));
-  const text = fs.readFileSync(r.path, 'utf8');
-  assert.match(text, /MineAgent session/);
-  assert.match(text, /test goal/);
-  assert.match(text, /unit test/);
+  trackMemory(r.path);
+  try {
+    assert.equal(r.ok, true);
+    assert.ok(fs.existsSync(r.path));
+    const text = fs.readFileSync(r.path, 'utf8');
+    assert.match(text, /MineAgent session/);
+    assert.match(text, /test goal/);
+    assert.match(text, /unit test/);
+  } finally {
+    if (r.path) try { fs.unlinkSync(r.path); } catch { /* already gone */ }
+  }
 });
 
 test('commitImprovements is a no-op when nothing in skills/scripts changed', async () => {
@@ -66,9 +72,14 @@ test('shutdown disconnects and writes a session summary', async () => {
   // The current session state may have a connected bot, so we mock by
   // ensuring state.bot is null. shutdown() should be safe to call.
   const r = await shutdown({ goal: 'unit test', exitReason: 'unit test' });
-  assert.equal(r.ok, true);
-  assert.ok(r.summary);
-  assert.ok(fs.existsSync(r.summary));
+  trackMemory(r.summary);
+  try {
+    assert.equal(r.ok, true);
+    assert.ok(r.summary);
+    assert.ok(fs.existsSync(r.summary));
+  } finally {
+    if (r.summary) try { fs.unlinkSync(r.summary); } catch { /* already gone */ }
+  }
 });
 
 function runGit(args, cwd) {

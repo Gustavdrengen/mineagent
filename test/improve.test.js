@@ -14,6 +14,7 @@ import {
   listMemories,
   paths,
 } from '../src/improve.js';
+import { trackMemory } from './_memories-cleanup.js';
 
 test('createSkill writes a markdown file by default', () => {
   const r = createSkill({ name: 'unit-test-skill', body: '# test\n' });
@@ -49,15 +50,22 @@ test('createScript writes a .js file', () => {
 
 test('writeMemory writes a .md file into memories/', () => {
   const r = writeMemory({ name: 'unit-test-memo', body: 'remembered\n' });
-  assert.equal(r.ok, true);
-  assert.ok(r.path.startsWith(paths.memoriesDir));
-  fs.unlinkSync(r.path);
+  trackMemory(r.path);
+  try {
+    assert.equal(r.ok, true);
+    assert.ok(r.path.startsWith(paths.memoriesDir));
+  } finally {
+    if (r.path) try { fs.unlinkSync(r.path); } catch { /* already gone */ }
+  }
 });
 
 test('list functions return arrays of paths', () => {
   const s = createSkill({ name: 'unit-test-list-skill', body: 'x' });
   const sc = createScript({ name: 'unit-test-list-script', body: 'y' });
   const m = writeMemory({ name: 'unit-test-list-memo', body: 'z' });
+  trackMemory(s.path);
+  trackMemory(sc.path);
+  trackMemory(m.path);
   try {
     const skills = listSkills();
     const scripts = listScripts();

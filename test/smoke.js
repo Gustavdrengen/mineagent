@@ -28,6 +28,7 @@ import {
 } from '../src/skills/movement.js';
 import { status } from '../src/skills/status.js';
 import { parseCommand, handleCommand } from '../src/skills/chat.js';
+import { trackMemory } from './_memories-cleanup.js';
 
 let failed = false;
 function check(label, cond, detail) {
@@ -116,7 +117,8 @@ const memoryFile = writeMemory({ name: 'smoke-test-memo', body: 'z' });
 check('self-improvement write_memory writes a file', memoryFile.ok && fs.existsSync(memoryFile.path));
 if (memoryFile.ok) {
   check('list_memories includes the new file', listMemories().includes(memoryFile.path));
-  fs.unlinkSync(memoryFile.path);
+  trackMemory(memoryFile.path);
+  try { fs.unlinkSync(memoryFile.path); } catch { /* already gone */ }
 }
 
 const off = attachChatListener();
