@@ -199,3 +199,18 @@ What is broken / rough / missing in a way a user would notice:
 
 What is "there" but feels bad to use:
 - The MCP server's real subprocess test (the last test in `test/mcp-server.test.js`) spawns a real `node src/mcp-server.js` and filters out `DeprecationWarning` lines from stderr. The filter is robust to Node version changes now, but a future feature that legitimately needs to write to stderr (e.g., a startup progress line) will silently confuse this test. A `MA_VERBOSE=1` env var or a dedicated log channel would be cleaner.
+
+### 2026-06-13 — test pollution cleanup
+
+What works:
+- `test/_memories-cleanup.js` is a shared helper. `trackMemory(path)` registers a file for cleanup; the first call auto-installs a `process.on('exit')` hook that removes every tracked file when the test process exits. The hook is the safety net for assertion failures (the runner unwinds, `exit` fires, `unlinkSync` runs). A caveat comment warns future test authors that the hook only fires when the event loop is empty, so any spawned children must be awaited.
+- `test/shutdown.test.js` (the `writeSessionSummary` and `shutdown` tests) and `test/improve.test.js` (the `writeMemory` and `list functions` tests) now call `trackMemory(r.path)` and wrap their bodies in `try/finally` with a synchronous `unlinkSync`. The manual unlink keeps the workspace clean *between* tests during a single run; the exit hook is the assertion-failure safety net.
+- `test/smoke.js` also uses `trackMemory` for the `smoke-test-memo` so the smoke run is covered by the same safety net.
+- `workspace/memories/` is clean: only `README.md`, `.gitkeep`, and the empty `proposals/` directory remain. The 110 test-created `session-*.md` files (all `exitReason: 'unit test'`) have been removed.
+- 124/124 tests passing (`npm test`). Smoke check OK (`npm run smoke`).
+
+What is broken / rough / missing in a way a user would notice:
+- None new. The shutdown-handler/commitImprovements tension and the `send_chat` error-kind string match noted in the prior state-of-play entry are still open.
+
+What is "there" but feels bad to use:
+- The `try/finally` + manual `unlinkSync` pattern is repetitive across the four updated tests. A small `withMemoryCleanup(fn)` wrapper could collapse it, but the explicit `trackMemory` + `unlinkSync` makes the create-and-cleanup boundary obvious at the call site, which is the higher-value readability trade-off.
