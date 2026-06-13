@@ -1,0 +1,17 @@
+# dependencies
+node_modules/
+
+# runtime artifacts
+.runtime/
+*.log
+npm-debug.log*
+
+# run-local agent memories
+workspace/memories/*
+!workspace/memories/.gitkeep
+
+# editor / OS noise
+.DS_Store
+.vscode/
+.idea/
+*.swp

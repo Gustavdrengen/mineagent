@@ -1,0 +1,21 @@
+{
+  "name": "mineagent",
+  "version": "0.1.0",
+  "description": "A Mineflayer-based Minecraft playing agent with chat, voice, and a browser observer.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test test/connection.test.js",
+    "smoke": "node test/smoke.js",
+    "observer": "node server/index.js"
+  },
+  "dependencies": {
+    "mineflayer": "^4.17.0"
+  }
+}
