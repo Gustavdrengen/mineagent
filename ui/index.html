@@ -4,70 +4,76 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MineAgent Observer</title>
-  <style>
-    :root {
-      color-scheme: dark;
-      --bg: #0f1115;
-      --panel: #1a1f27;
-      --border: #2a313c;
-      --text: #d8dee9;
-      --muted: #8a93a3;
-      --accent: #4ade80;
-    }
-    body {
-      font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
-      margin: 0;
-      padding: 2rem;
-      background: var(--bg);
-      color: var(--text);
-    }
-    main { max-width: 720px; margin: 0 auto; }
-    h1 { color: var(--accent); margin: 0 0 0.25rem; font-size: 1.25rem; }
-    .sub { color: var(--muted); margin-bottom: 1.5rem; }
-    .panel {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 1rem;
-    }
-    .panel h2 {
-      margin: 0 0 0.75rem;
-      font-size: 0.85rem;
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-      color: var(--muted);
-    }
-    pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
-    .note { color: var(--muted); font-size: 0.85rem; margin-top: 0.75rem; }
-  </style>
+  <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <main>
-    <h1>MineAgent Observer</h1>
-    <p class="sub">Live state for the running agent. Polls <code>/status</code> every second.</p>
+    <header>
+      <h1>MineAgent Observer</h1>
+      <p class="sub">Live state, chat, and voice for the running agent.</p>
+      <div class="conn">
+        <span id="connDot" class="dot off" aria-hidden="true"></span>
+        <span id="connText">disconnected</span>
+      </div>
+    </header>
 
-    <section class="panel">
-      <h2>Connection</h2>
-      <pre id="status">loading…</pre>
-      <p class="note">Live streaming (chat, position, events) is layered on in a later commit.</p>
-    </section>
+    <div class="grid">
+      <section class="panel">
+        <h2>Status</h2>
+        <dl class="kv">
+          <dt>Connection</dt><dd id="status">—</dd>
+          <dt>Server</dt><dd id="server">—</dd>
+          <dt>Bot</dt><dd id="username">—</dd>
+          <dt>Task</dt><dd id="task">idle</dd>
+          <dt>Session</dt><dd id="session">—</dd>
+          <dt>Last error</dt><dd id="lastError">—</dd>
+        </dl>
+      </section>
+
+      <section class="panel">
+        <h2>Position &amp; Health</h2>
+        <dl class="kv">
+          <dt>Position</dt><dd id="position">—</dd>
+          <dt>Health</dt><dd id="health">—</dd>
+          <dt>Food</dt><dd id="food">—</dd>
+        </dl>
+      </section>
+
+      <section class="panel">
+        <h2>Inventory</h2>
+        <ul id="inventory" class="list"><li class="empty">not connected</li></ul>
+      </section>
+
+      <section class="panel wide">
+        <h2>Recent Actions</h2>
+        <ul id="actions" class="log"><li class="empty">no actions yet</li></ul>
+      </section>
+
+      <section class="panel wide">
+        <h2>Chat</h2>
+        <ul id="chat" class="log chat"><li class="empty">no chat yet</li></ul>
+        <form id="chatForm" class="row">
+          <input id="chatInput" type="text" placeholder="Say something in chat (sent via the agent loop)…" autocomplete="off">
+          <button type="submit">Send</button>
+        </form>
+        <p class="note">Chat is forwarded to the in-game chat. Voice replies are spoken through this browser.</p>
+      </section>
+
+      <section class="panel wide">
+        <h2>Voice</h2>
+        <div class="row">
+          <input id="voiceInput" type="text" placeholder="Speak a line…" autocomplete="off">
+          <button id="voiceBtn" type="button">Speak</button>
+          <label class="toggle">
+            <input id="voiceAuto" type="checkbox" checked>
+            <span>Auto-speak agent voice events</span>
+          </label>
+        </div>
+        <ul id="voice" class="log"><li class="empty">no voice yet</li></ul>
+      </section>
+    </div>
   </main>
 
-  <script>
-    const statusEl = document.getElementById('status');
-
-    async function refresh() {
-      try {
-        const r = await fetch('/status', { cache: 'no-store' });
-        const j = await r.json();
-        statusEl.textContent = JSON.stringify(j, null, 2);
-      } catch (e) {
-        statusEl.textContent = 'observer error: ' + e.message;
-      }
-    }
-
-    refresh();
-    setInterval(refresh, 1000);
-  </script>
+  <script src="/app.js"></script>
 </body>
 </html>
