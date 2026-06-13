@@ -69,6 +69,8 @@ The agent should have all of the connection-related tools it needs built in, inc
 - `connect_to_last_known_server` — re-connect to the server saved in `memories/` from a previous run
 - `forget_last_server` — clear the remembered server when the user changes context
 
+In addition to the connection tools, MineAgent should have a **broad in-world action API** so the agent can actually play the world: `move_to`, `stop_moving`, `follow_player`, `look_at_block`, `look_at_position`, `mine_block`, `place_block`, `find_block`, `read_chat_history`, `scan_nearby_entities`, `get_block_info`, `equip_item`, `drop_item`, `use_held_item`, `attack_entity`. Every action tool returns the standard `{ ok, error?, kind? }` envelope and reports a stable `kind` (e.g. `not_connected`, `item_missing`, `target_required`, `no_position`) so the agent can branch on the result without parsing message strings.
+
 ## MCP-Based Tool Surface
 
 MineAgent exposes its tools through an **MCP (Model Context Protocol) server** at `src/mcp-server.js`. The MCP server is the single bridge between the persona (or any MCP client) and the Mineflayer stack. The persona never calls into `src/` directly; every action flows through a `tools/call` request to the server.
@@ -88,7 +90,8 @@ The MCP server's `tools/list` exposes a single, broad API. From the calling pers
 The broad API covers:
 
 - **Connection and session.** connect, disconnect, status, set username, ask the user, reconnect to the last server, forget it, shut down.
-- **In-world communication.** `send_chat` for chat, `speak` for browser TTS.
+- **In-world communication.** `send_chat` for chat. TTS is an automatic side effect of every `send_chat` call; the agent never calls a separate speak tool.
+- **In-world action.** `move_to`, `stop_moving`, `follow_player`, `look_at_block`, `look_at_position`, `mine_block`, `place_block`, `find_block`, `read_chat_history`, `scan_nearby_entities`, `get_block_info`, `equip_item`, `drop_item`, `use_held_item`, `attack_entity`. Every action helper returns the standard `{ ok, error?, kind? }` envelope and never throws, so the agent loop can branch on the result without try/catch.
 - **Bookkeeping.** list/read/write memories; read the last-known server; persist session notes.
 - **Skill discovery and read.** list/read skills and scripts; list/read proposals.
 - **Skill management (committed).** `propose_skill_change` is the only path to a committed modification to `workspace/skills/` or `workspace/scripts/`. The execute tools (`create_skill`, `update_skill`, `remove_skill`, `create_script`) are gated by an in-session user approval in chat.
@@ -235,9 +238,11 @@ Note: not every skill needs to mention a tool. Some skills are pure descriptions
 
 MineAgent should be able to read player chat and respond in chat.
 
-It should also have a speak tool that triggers browser text-to-speech so the bot can say voice lines through the web UI.
+The persona has exactly one in-world voice: `send_chat`. Every `send_chat` call also triggers browser text-to-speech as an internal side effect, so the bot can say voice lines through the web UI. The agent does not need — and is not exposed to — a separate `speak` tool. TTS is invisible to the agent and is a fixed consequence of sending chat.
 
-The browser should be the place where the voice is played.
+The single in-world voice helper is `say()` in `src/skills/chat.js`. It validates input, calls `sendChat()` in `src/connection.js`, converts the typed `NotConnectedError` into a `{ ok: false, kind: 'not_connected' }` envelope, and re-throws unknown errors. The `send_chat` MCP tool wrapper and the `/api/say` HTTP route both call `say()` so there is exactly one envelope-conversion point in the codebase.
+
+The browser is the place where the voice is played.
 
 ## Browser Observer
 

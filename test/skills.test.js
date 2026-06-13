@@ -23,7 +23,6 @@ import {
   placeBlock,
   lookAtBlock,
 } from '../src/skills/world-interaction.js';
-import { speak } from '../src/speak.js';
 
 function connectedBot(extra = {}) {
   return {
@@ -168,21 +167,6 @@ test('lookAtBlock rejects missing position', async () => {
   const r = await lookAtBlock({});
   assert.equal(r.ok, false);
   assert.match(r.error, /position is required/);
-});
-
-// ---------- speak ----------
-
-test('speak records a voice event', () => {
-  resetRuntime();
-  const r = speak('hello world');
-  assert.equal(r.ok, true);
-  assert.equal(r.text, 'hello world');
-  assert.equal(state.voiceEvents[state.voiceEvents.length - 1].text, 'hello world');
-});
-
-test('speak rejects empty text', () => {
-  const r = speak('   ');
-  assert.equal(r.ok, false);
 });
 
 // Final cleanup so other test files start fresh.

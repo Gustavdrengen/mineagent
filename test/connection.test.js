@@ -14,7 +14,6 @@ const REQUIRED_TOOLS = [
 ];
 
 const NEW_TOOLS = [
-  'speak',
   'shutdown',
   'create_skill',
   'create_script',
@@ -31,7 +30,7 @@ test('all five vision-mandated connection tools are registered', () => {
   }
 });
 
-test('new tools (speak, shutdown, self-improvement) are registered', () => {
+test('new tools (shutdown, self-improvement) are registered', () => {
   const names = tools.map((t) => t.name);
   for (const required of NEW_TOOLS) {
     assert.ok(names.includes(required), `missing tool: ${required}`);
@@ -95,13 +94,10 @@ test('ask_user_for_server returns a prompt', async () => {
   assert.ok(result.prompt.length > 0);
 });
 
-test('speak rejects empty text and accepts a string', async () => {
-  const tool = findTool('speak');
-  const empty = await tool.execute({ text: '' });
-  assert.equal(empty.ok, false);
-  const ok = await tool.execute({ text: 'hello' });
-  assert.equal(ok.ok, true);
-  assert.equal(ok.text, 'hello');
+test('speak tool is not registered (auto-TTS via send_chat)', () => {
+  // Consolidation: there is no speak tool. Voice is an internal side
+  // effect of send_chat; the agent never calls a separate TTS tool.
+  assert.equal(findTool('speak'), null);
 });
 
 test('self-improvement tools list empty workspace directories cleanly', async () => {

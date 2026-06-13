@@ -58,10 +58,25 @@ The user-facing API in MineAgent is just `getToolManifest()` and `callTool(name,
 | `disconnect_from_server` | Clean shutdown of the current connection. |
 | `set_username` | Override the configured username for the next connect. |
 | `connection_status` | Live snapshot of the bot state. |
+| `send_chat` | Send a line of text in chat. Auto-plays through the browser observer TTS as an automatic side effect. Returns `{ ok: true, message: text }` on success; `{ ok: false, error, kind: 'not_connected' }` when the bot is offline; `{ ok: false, error, kind: 'message_required' }` on empty input. The single in-world voice path — the agent never calls a separate TTS tool. |
 | `ask_user_for_server` | Get a prompt to ask the user for an IP/port. |
-| `connect_to_last_known_server` | Reconnect to the server in `memories/last-server.json`. |
+| `connect_to_last_known_server` | Re-connect to the server in `memories/last-server.json`. |
 | `forget_last_server` | Clear the remembered server. |
-| `speak` | Trigger a TTS voice event through the browser observer. |
+| `move_to` | Walk the bot to a destination via pathfinding. |
+| `stop_moving` | Stop the current movement and any active follow loop. |
+| `follow_player` | Follow a player by name for up to `durationMs` (default 30s). |
+| `look_at_block` | Look at the block at a coordinate. |
+| `look_at_position` | Look at an arbitrary point in the world. |
+| `mine_block` | Mine a block by name. Searches within `range` blocks (default 4). |
+| `place_block` | Place a block from the bot's inventory at a coordinate. |
+| `find_block` | Find the nearest block of a given name within `maxDistance` blocks. |
+| `read_chat_history` | Read the last `limit` chat messages (default 20, max 100). |
+| `scan_nearby_entities` | List nearby entities, optionally filtered by `type` (`all`, `player`, `mob`, `other`, `hostile`, `passive`). |
+| `get_block_info` | Get the block at a coordinate. Returns `{ ok: true, block: null }` if no block (no `kind` on a successful empty lookup). |
+| `equip_item` | Equip an item from the bot's inventory by name. |
+| `drop_item` | Drop an item from the bot's inventory. `count` defaults to 1. |
+| `use_held_item` | Use the held item (right-click). |
+| `attack_entity` | Attack an entity by `username` (player) or `entityId` (any entity). |
 | `shutdown` | Stop the bot, write a session summary, attempt a commit. |
 | `propose_skill_change` | **Start a committable change.** Writes to `memories/proposals/`, returns a `chatPrompt` to ask the user. |
 | `list_proposals` | List pending proposals in `memories/proposals/`. |
@@ -75,6 +90,9 @@ The user-facing API in MineAgent is just `getToolManifest()` and `callTool(name,
 | `list_skills` | List files in `workspace/skills/`. |
 | `list_scripts` | List files in `workspace/scripts/`. |
 | `list_memories` | List files in `workspace/memories/`. |
+| `read_skill` | Read the body of a skill. |
+| `read_script` | Read the body of a script. |
+| `read_memory` | Read a memory file (full filename including extension). |
 
 ## Committable-change flow
 
@@ -133,8 +151,22 @@ Stable, defined in `src/connection.js` (`ERROR_KIND`) and the tool-level helpers
 | `not_whitelisted` | `connect_to_server` | Kicked reason mentions whitelist. |
 | `kicked` | `connect_to_server` | Kicked for other reasons. |
 | `no_memory` | `connect_to_last_known_server` | No `memories/last-server.json` to read. |
+| `not_connected` | `send_chat` and any in-world tool | The bot is offline. The tool did not attempt the action. |
+| `message_required` | `send_chat` | The `text` argument was missing, not a string, or empty/whitespace. |
+| `item_missing` | `equip_item`, `drop_item` | The named item is not in the bot's inventory. |
+| `name_required` | `equip_item`, `drop_item`, `find_block` | The `name` argument was missing or empty. |
+| `count_invalid` | `drop_item` | `count` was not a positive number. |
+| `equip_failed` / `drop_failed` / `use_failed` / `look_failed` / `attack_failed` / `block_lookup_failed` | respective tools | The Mineflayer call threw; the `error` field carries Mineflayer's message. |
+| `target_required` / `target_missing` | `attack_entity` | `attack_entity` needs `username` or `entityId`; the named target was not found in the bot's entities/players. |
+| `no_position` | `scan_nearby_entities`, `attack_entity` | The bot has a live connection but no `entity.position` yet (mid-spawn or world not loaded). |
+| `coords_invalid` | `get_block_info`, `look_at_position` | One of `x`, `y`, `z` is not a finite number. |
+| `unknown_block` | `find_block` | The named block is not in Mineflayer's block registry. |
 | `unknown_tool` | `callTool` | The name passed to `callTool` is not registered. The `hint` field lists available tools. |
-| `execution_error` | `callTool` | The tool's `execute` threw an exception. |
+| `execution_error` | `callTool` | The tool's `execute` threw an exception (genuine bug, not a user-facing failure). |
+
+`callTool(name, args)` is the harness-facing entry point. It is the only way the harness should invoke a tool, so the unknown-tool diagnostic and exception wrapping are guaranteed.
+
+**Note on `kind` semantics:** `kind` is reserved for error categories. A successful tool call that returned an empty result (e.g. `get_block_info` with no block at the coordinate, or `find_block` with no block in range) returns `{ ok: true, ... }` with **no** `kind` field. Callers should branch on `r.ok` first, then on `r.kind` if `r.ok` is false.
 
 `callTool(name, args)` is the harness-facing entry point. It is the only way the harness should invoke a tool, so the unknown-tool diagnostic and exception wrapping are guaranteed.
 

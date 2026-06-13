@@ -30,12 +30,32 @@ test('writeSessionSummary writes a markdown file into memories/', () => {
 });
 
 test('commitImprovements is a no-op when nothing in skills/scripts changed', async () => {
-  // No git changes expected in the working copy of this repo. The function
-  // should return `committed: false` and `ok: true`.
-  const r = await commitImprovements();
-  assert.equal(r.ok, true);
-  assert.equal(r.committed, false);
-  assert.match(r.reason || '', /no changes/);
+  // Run against a throwaway git repo, NOT the project repo. The earlier
+  // version of this test called commitImprovements() on the project
+  // repo directly; if the working tree happened to have uncommitted
+  // changes in workspace/skills/ or workspace/scripts/ (for example,
+  // from a test in another file that wrote a sample skill), the call
+  // would produce a real commit authored by the playing agent. The
+  // throwaway cwd parameter makes that impossible: this test can no
+  // longer touch the project repo's history, no matter what state
+  // other test files leave behind.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mineagent-shutdown-noop-'));
+  fs.mkdirSync(path.join(tmp, 'workspace', 'skills'), { recursive: true });
+  fs.mkdirSync(path.join(tmp, 'workspace', 'scripts'), { recursive: true });
+  const init = runGit(['init', '-q'], tmp);
+  assert.equal(init.code, 0, `git init failed: ${init.stderr}`);
+  // Stage the empty directories so the assertion is independent of
+  // git's untracked-vs-empty behavior on `git status --porcelain`.
+  const add = runGit(['add', 'workspace/skills', 'workspace/scripts'], tmp);
+  assert.equal(add.code, 0, `git add failed: ${add.stderr}`);
+  try {
+    const r = await commitImprovements({ cwd: tmp });
+    assert.equal(r.ok, true);
+    assert.equal(r.committed, false);
+    assert.match(r.reason || '', /no changes/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test('commitImprovements actually commits when a new file is added', async () => {
@@ -68,19 +88,19 @@ test('commitImprovements actually commits when a new file is added', async () =>
   }
 });
 
-test('shutdown disconnects and writes a session summary', async () => {
-  // The current session state may have a connected bot, so we mock by
-  // ensuring state.bot is null. shutdown() should be safe to call.
-  const r = await shutdown({ goal: 'unit test', exitReason: 'unit test' });
-  trackMemory(r.summary);
-  try {
-    assert.equal(r.ok, true);
-    assert.ok(r.summary);
-    assert.ok(fs.existsSync(r.summary));
-  } finally {
-    if (r.summary) try { fs.unlinkSync(r.summary); } catch { /* already gone */ }
-  }
-});
+// The previous version of this file contained a test
+// 'shutdown disconnects and writes a session summary' that called the
+// real shutdown() and therefore the real commitImprovements(). When
+// workspace/skills/ or workspace/scripts/ had uncommitted changes (for
+// example, from a test in another file that wrote a sample skill),
+// shutdown()'s git flow would create a real commit. That is the
+// playing-agent commit we are no longer allowed to make from a test.
+// The test has been removed. The three pieces it covered are
+// individually tested above (writeSessionSummary, commitImprovements
+// no-op, commitImprovements with a throwaway repo). If the
+// orchestrator needs an end-to-end test in the future, mock
+// commitImprovements or run shutdown in a throwaway git repo the
+// same way the throwaway-repo test does for commitImprovements.
 
 function runGit(args, cwd) {
   const env = {

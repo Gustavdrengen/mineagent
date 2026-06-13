@@ -11,7 +11,6 @@ import { getStatus } from '../src/connection.js';
 import { tools, findTool } from '../src/tools/index.js';
 import { state, snapshot, STATUS } from '../src/state.js';
 import { subscribe, emit } from '../src/events.js';
-import { speak } from '../src/speak.js';
 import { runGoal, attachChatListener, getActiveGoal } from '../src/agent.js';
 import { shutdown, commitImprovements } from '../src/shutdown.js';
 import {
@@ -51,7 +50,6 @@ for (const required of [
   'set_username',
   'connection_status',
   'ask_user_for_server',
-  'speak',
   'shutdown',
   'create_skill',
   'create_script',
@@ -77,14 +75,18 @@ check(
 
 check('connection_status through tool returns ok', (await findTool('connection_status').execute({})).ok === true);
 
-const emptySpeak = await speak('   ');
-check('speak with empty text returns !ok', emptySpeak.ok === false);
+const emptySend = await findTool('send_chat').execute({ text: '   ' });
+check('send_chat with empty text returns !ok', emptySend.ok === false);
 
-const speakResult = speak('smoke-test');
+const sendChatResult = await findTool('send_chat').execute({ text: 'smoke-test' });
+// The bot is not connected in the smoke run, so the in-world send
+// returns !ok, but the auto-TTS side effect still records a voice
+// event for the observer.
 check(
-  'speak with text records a voice event',
-  speakResult.ok === true && state.voiceEvents[state.voiceEvents.length - 1].text === 'smoke-test'
+  'send_chat auto-TTS records a voice event',
+  state.voiceEvents[state.voiceEvents.length - 1].text === 'smoke-test'
 );
+void sendChatResult;
 
 const parsed = parseCommand('!status please');
 check('chat parseCommand on "!status please"', parsed && parsed.name === '!status' && parsed.args[0] === 'please');

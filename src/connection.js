@@ -28,6 +28,7 @@ import {
   setInventory,
   setCurrentTask,
   recordChat,
+  recordVoice,
   recordAction,
   resetRuntime,
   markSessionStart,
@@ -56,8 +57,20 @@ export const ERROR_KIND = Object.freeze({
   KICKED: 'kicked',
   ALREADY_CONNECTING: 'already_connecting',
   NO_HOST: 'no_host',
+  NOT_CONNECTED: 'not_connected',
   UNKNOWN: 'unknown',
 });
+
+// Thrown by the connection helpers (sendChat, etc.) when the bot is
+// offline. Tool wrappers should `instanceof` check this class so the
+// kind is stable across Mineflayer's error-message rewording.
+export class NotConnectedError extends Error {
+  constructor(message = 'not connected') {
+    super(message);
+    this.name = 'NotConnectedError';
+    this.kind = ERROR_KIND.NOT_CONNECTED;
+  }
+}
 
 // Map a low-level Node error code to a stable kind. err.code is the
 // canonical signal Mineflayer surfaces from the socket layer.
@@ -303,9 +316,19 @@ export function disconnectFromServer() {
 }
 
 export function sendChat(message) {
+  if (typeof message !== 'string' || message.length === 0) {
+    return { ok: false, error: 'message is required' };
+  }
+  // Auto-TTS: every chat line the bot sends is also played through the
+  // browser observer's text-to-speech. This is an internal side effect
+  // of sendChat — the agent does not call a separate "speak" tool. We
+  // record the voice event before the connection check so the
+  // observer/TTS layer still sees the attempt when the bot is offline.
+  recordVoice(message);
+  emit('voice', { text: message });
   const bot = state.bot;
   if (!bot || state.status !== STATUS.CONNECTED) {
-    return { ok: false, error: 'not connected' };
+    throw new NotConnectedError();
   }
   bot.chat(message);
   recordChat(bot.username, message);

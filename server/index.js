@@ -11,6 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { getStatus } from '../src/connection.js';
+import { say } from '../src/skills/chat.js';
 import { subscribe } from '../src/events.js';
 import { snapshot } from '../src/state.js';
 
@@ -77,14 +78,24 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ ok: false, error: 'text is required' }));
       return;
     }
-    const { sendChat } = await import('../src/connection.js');
-    const { speak } = await import('../src/speak.js');
-    const chatResult = body.sendToGame !== false
-      ? sendChat(body.text)
+    // sendChat auto-broadcasts a voice event for the browser observer
+    // to play through TTS, so the chat endpoint no longer needs a
+    // separate speak call. say() is the single in-world voice helper;
+    // it converts a NotConnectedError throw into a structured envelope
+    // so the HTTP route always gets a result, not a 500.
+    const result = body.sendToGame !== false
+      ? say({ message: body.text })
       : { ok: true };
-    const voiceResult = speak(body.text);
     res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ ok: true, chat: chatResult, voice: voiceResult }));
+    res.end(
+      JSON.stringify({
+        ok: result.ok !== false,
+        chat: result,
+        voice: result.ok
+          ? { ok: true, text: body.text }
+          : { ok: false, error: result.error },
+      })
+    );
     return;
   }
   if (req.url === '/' || req.url === '/index.html') {

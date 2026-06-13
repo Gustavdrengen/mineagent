@@ -6,16 +6,13 @@
 // from stdin. Both paths go through the same `dispatch` function so the
 // CLI goal input and the in-game chat behave identically.
 
-import { subscribe } from './events.js';
+import { emit, subscribe } from './events.js';
 import { state } from './state.js';
-import { sendChat } from './connection.js';
-import { speak } from './speak.js';
 import { handleCommand, parseCommand, say } from './skills/chat.js';
 import { status } from './skills/status.js';
 import { moveToCoordinates, followPlayer, stopMoving } from './skills/movement.js';
 import { mineBlock, placeBlock, lookAtBlock } from './skills/world-interaction.js';
 import { createSkill, createScript, writeMemory } from './improve.js';
-import { emit } from './events.js';
 
 let running = false;
 let activeGoal = null;
@@ -48,12 +45,11 @@ export async function dispatch({ from, message }) {
           ? `I am at ${s.position.x}, ${s.position.y}, ${s.position.z}.`
           : 'I am not connected to a server right now.';
       recordChatReply(text);
-      speak(text);
       return { ok: true, handled: true, kind: 'smalltalk', reply: text };
     }
     return { ok: true, handled: false };
   }
-  return handleCommand({ from, message, parsed, speak });
+  return handleCommand({ from, message, parsed });
 }
 
 export function attachChatListener() {
@@ -65,7 +61,15 @@ export function attachChatListener() {
     try {
       await dispatch({ from: payload.username, message: payload.message });
     } catch (err) {
-      sendChat(`I hit an error: ${err.message}`);
+      // The error reporter can itself fail (say() re-throws unknown
+      // errors, the bot may be mid-disconnect). Wrap the reporter in
+      // its own try/catch so a double-fault doesn't escape silently
+      // from the event subscriber.
+      try {
+        say({ message: `I hit an error: ${err.message}` });
+      } catch (reporterErr) {
+        console.error('[agent] error reporter failed:', reporterErr.message);
+      }
     }
   });
 }
@@ -136,7 +140,6 @@ async function runGoalInternal(goal) {
   if (lower.startsWith('say ')) {
     const reply = text.slice(4);
     recordChatReply(reply);
-    speak(reply);
     return { ok: true, said: reply };
   }
   if (lower.startsWith('remember ')) {
@@ -169,9 +172,10 @@ async function runGoalInternal(goal) {
       ],
     };
   }
-  // Fallback: echo as a chat reply and a spoken line.
+  // Fallback: echo the goal as a chat line. TTS is an automatic side
+  // effect of sendChat, so the agent does not need to call anything
+  // else.
   recordChatReply(goal);
-  speak(goal);
   return { ok: true, fallback: true, echoed: goal };
 }
 

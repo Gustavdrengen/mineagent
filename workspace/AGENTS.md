@@ -45,8 +45,27 @@ The MCP server exposes the following categories of tools. Every one of them is r
 
 | Tool | Purpose |
 |---|---|
-| `send_chat` | Send a line of text in chat. Your in-world voice. |
-| `speak` | Trigger a TTS voice event through the browser observer. |
+| `send_chat` | Send a line of text in chat. Your in-world voice. Every successful `send_chat` call also triggers a browser TTS playback as an automatic side effect; the agent does not need a separate `speak` tool. |
+
+### In-world action
+
+| Tool | Purpose |
+|---|---|
+| `move_to` | Walk the bot to a destination via pathfinding. |
+| `stop_moving` | Stop the current movement and any active follow loop. |
+| `follow_player` | Follow a player by name for up to `durationMs` (default 30s). |
+| `look_at_block` | Look at the block at a coordinate. |
+| `look_at_position` | Look at an arbitrary point in the world. |
+| `mine_block` | Mine a block by name. Searches within `range` blocks (default 4). |
+| `place_block` | Place a block from the bot's inventory at a coordinate. |
+| `find_block` | Find the nearest block of a given name within `maxDistance` blocks. |
+| `read_chat_history` | Read the last `limit` chat messages (default 20, max 100). |
+| `scan_nearby_entities` | List nearby entities, optionally filtered by `type` (`all`, `player`, `mob`, `other`, `hostile`, `passive`). |
+| `get_block_info` | Get the block at a coordinate. |
+| `equip_item` | Equip an item from the bot's inventory by name. |
+| `drop_item` | Drop an item from the bot's inventory. |
+| `use_held_item` | Use the held item (right-click). |
+| `attack_entity` | Attack an entity by `username` (player) or `entityId` (any entity). |
 
 ### Bookkeeping
 

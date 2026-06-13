@@ -18,29 +18,14 @@
 // registry owns the shape and the canonical `parameters` name; each
 // harness adapter (e.g. the MCP server in `src/mcp-server.js`) does
 // its own rename on the way out.
-//
-//   {
-//     "type": "object",
-//     "additionalProperties": false,
-//     "properties": { ... per-arg JSON Schemas ... },
-//     "required": [ ... arg names ... ]
-//   }
-//
-// **Decision:** Tool descriptor shape — JSON Schema subset with
-// `name`/`description`/`parameters`/`execute`. **Tier:** T1.
-// **Evidence:** Research across MCP, OpenAI, Anthropic, Gemini converges
-// on this exact shape. **Trade-off:** None — this is the strict
-// intersection, not a custom format, so it loses nothing and gains
-// portability.
 
 import {
   connectToServer,
   disconnectFromServer,
-  sendChat,
   getStatus,
 } from '../connection.js';
 import { state } from '../state.js';
-import { speak } from '../speak.js';
+import { say } from '../skills/chat.js';
 import { shutdown, writeSessionSummary, commitImprovements } from '../shutdown.js';
 import {
   createSkill,
@@ -62,16 +47,33 @@ import {
   rejectProposal,
 } from '../improve.js';
 import { subscribe } from '../events.js';
-
-// JSON Schema parameter descriptors. These are the building blocks every
-// tool in MineAgent composes from. They use the strict subset every
-// modern harness accepts.
+import {
+  moveToCoordinates,
+  stopMoving,
+  followPlayer,
+} from '../skills/movement.js';
+import {
+  mineBlock,
+  placeBlock,
+  lookAtBlock,
+} from '../skills/world-interaction.js';
+import {
+  equipItem,
+  dropItem,
+  useHeldItem,
+  readChatHistory,
+  scanNearbyEntities,
+  getBlockInfo,
+  findBlock,
+  lookAtPosition,
+  attackEntity,
+} from '../skills/in-world.js';
 
 export const PARAM = {
   string: (description, { required = false, enum: enumValues } = {}) => {
     const out = { type: 'string', description };
     if (enumValues) out.enum = enumValues;
-    if (required) out._required = true; // consumed by buildParameters()
+    if (required) out._required = true;
     return out;
   },
   number: (description, { required = false } = {}) => {
@@ -86,10 +88,6 @@ export const PARAM = {
   },
 };
 
-// Build the strict JSON Schema object that harness manifests expect. The
-// `required` array is derived from the `_required` markers each PARAM
-// helper attached, then the markers are stripped so they don't leak into
-// the wire format.
 export function buildParameters(fields) {
   const properties = {};
   const required = [];
@@ -106,11 +104,6 @@ export function buildParameters(fields) {
   };
 }
 
-// The vision-mandated connection tools plus everything the in-world
-// persona needs: speak, shutdown, self-improvement, and the optional
-// "connect to the last server I remember" tool that honors the vision's
-// "from a previous run saved in memories/" branch.
-
 export const tools = [
   {
     name: 'connect_to_server',
@@ -119,22 +112,13 @@ export const tools = [
       'Reports success or a structured error with a stable error.kind ' +
       '(unreachable, refused, timeout, auth_required, version_mismatch, ' +
       'not_whitelisted, kicked, no_host, already_connecting, unknown). ' +
-      'MineAgent only connects to offline-mode servers; if the server ' +
-      'requires Mojang auth, error.kind will be "auth_required". ' +
-      'Every attempt (success or failure) updates memories/last-server.json.',
+      'MineAgent only connects to offline-mode servers.',
     parameters: buildParameters({
       host: PARAM.string('Server hostname or IP address.', { required: true }),
       port: PARAM.number('Server port. Defaults to 25565.'),
-      username: PARAM.string(
-        'In-game username. Defaults to the configured username (MineAgent).'
-      ),
+      username: PARAM.string('In-game username. Defaults to the configured username (MineAgent).'),
     }),
-    execute: async ({ host, port, username } = {}) => {
-      // The connection layer persists the last-known server on every
-      // attempt (success or failure), so the tool layer does not need
-      // to duplicate that work.
-      return connectToServer({ host, port, username });
-    },
+    execute: async ({ host, port, username } = {}) => connectToServer({ host, port, username }),
   },
   {
     name: 'disconnect_from_server',
@@ -144,91 +128,53 @@ export const tools = [
   },
   {
     name: 'set_username',
-    description:
-      'Override the username used for the next connect. ' +
-      'Must be a non-empty string.',
+    description: 'Override the username used for the next connect.',
     parameters: buildParameters({
       username: PARAM.string('New default username.', { required: true }),
     }),
     execute: async ({ username } = {}) => {
-      if (!username) {
-        return { ok: false, error: 'username is required' };
-      }
+      if (!username) return { ok: false, error: 'username is required' };
       state.config.username = username;
       return { ok: true, username: state.config.username };
     },
   },
   {
     name: 'connection_status',
-    description:
-      'Report the current connection state. Returns the live snapshot ' +
-      'with status, host, port, username, position, health, inventory, ' +
-      'current task, and last error.',
+    description: 'Live snapshot of the bot state.',
     parameters: buildParameters({}),
     execute: async () => ({ ok: true, ...getStatus() }),
   },
   {
     name: 'send_chat',
     description:
-      'Send a line of text in chat. This is the in-world voice of the ' +
-      'persona — use it to respond to the user, narrate what you are ' +
-      'about to do, or echo a proposal for approval. A successful send ' +
-      'returns ok=true. On failure (the most common case being that ' +
-      'the bot is not connected to a server) returns ok=false with a ' +
-      'structured kind, typically "not_connected".',
+      'Send a line of text in chat. Auto-plays through the browser ' +
+      'observer TTS as an internal side effect. The agent never calls ' +
+      'a separate TTS tool.',
     parameters: buildParameters({
       text: PARAM.string('Chat line to send.', { required: true }),
     }),
     execute: async ({ text } = {}) => {
-      if (typeof text !== 'string' || text.length === 0) {
-        return { ok: false, error: 'text is required' };
-      }
-      try {
-        await sendChat(text);
-        return { ok: true, sent: text };
-      } catch (err) {
-        // The most common cause is that the bot is not in the world,
-        // but the connection layer may surface other failures. We
-        // record a best-effort kind and let the persona branch on the
-        // message if it needs to.
-        const message = typeof err.message === 'string' ? err.message.toLowerCase() : '';
-        const kind = message.includes('not connected') || message.includes('no bot')
-          ? 'not_connected'
-          : 'send_failed';
-        return { ok: false, error: err.message, kind };
-      }
+      // say() in src/skills/chat.js is the single in-world voice helper
+      // and the single NotConnectedError-to-envelope conversion point.
+      // It also owns the input validation. The wire format on success
+      // is the say() envelope: { ok, message: text }.
+      return say({ message: text });
     },
   },
   {
     name: 'ask_user_for_server',
-    description:
-      'Return a prompt the calling layer can present to the user when ' +
-      'the agent does not know the server IP/port. The MineAgent CLI ' +
-      'presents this prompt and feeds the answer back to ' +
-      'connect_to_server.',
+    description: 'Return a prompt the calling layer can present to the user.',
     parameters: buildParameters({}),
-    execute: async () => ({
-      ok: true,
-      prompt: "Hey, what's the IP address? (or 'IP and port?')",
-    }),
+    execute: async () => ({ ok: true, prompt: "Hey, what's the IP address? (or 'IP and port?')" }),
   },
   {
     name: 'connect_to_last_known_server',
-    description:
-      'Read the last server the agent successfully connected to from ' +
-      'workspace/memories/last-server.json and connect to it. ' +
-      'Implements the vision branch: "from a previous run saved in ' +
-      'memories/". If no memory exists, returns ok=false with kind ' +
-      '"no_memory".',
+    description: 'Reconnect to the server in memories/last-server.json.',
     parameters: buildParameters({}),
     execute: async () => {
       const remembered = readLastServer();
       if (!remembered || !remembered.host) {
-        return {
-          ok: false,
-          error: 'no remembered server in memories/',
-          kind: 'no_memory',
-        };
+        return { ok: false, error: 'no remembered server in memories/', kind: 'no_memory' };
       }
       return connectToServer({
         host: remembered.host,
@@ -239,33 +185,159 @@ export const tools = [
   },
   {
     name: 'forget_last_server',
-    description:
-      'Clear the remembered server in workspace/memories/last-server.json. ' +
-      'Use this when the user explicitly switches contexts.',
+    description: 'Clear the remembered server in workspace/memories/last-server.json.',
     parameters: buildParameters({}),
     execute: async () => {
       clearLastServer();
       return { ok: true, forgotten: true };
     },
   },
+
+  // --- In-world action tools (T1) -----------------------------------------
   {
-    name: 'speak',
-    description:
-      'Say a line out loud through the browser observer (TTS). ' +
-      'Records a voice event into state and broadcasts it to the ' +
-      'WebSocket observer.',
+    name: 'move_to',
+    description: 'Walk the bot to a destination via pathfinding.',
     parameters: buildParameters({
-      text: PARAM.string('Text to speak.', { required: true }),
+      x: PARAM.number('Destination X coordinate.', { required: true }),
+      y: PARAM.number('Destination Y coordinate.', { required: true }),
+      z: PARAM.number('Destination Z coordinate.', { required: true }),
+      tolerance: PARAM.number('How close counts as "arrived" in blocks. Defaults to 1.'),
     }),
-    execute: async ({ text } = {}) => speak(text),
+    execute: async ({ x, y, z, tolerance } = {}) => moveToCoordinates({ x, y, z, tolerance }),
   },
   {
+    name: 'stop_moving',
+    description: 'Stop the current movement and any active follow loop.',
+    parameters: buildParameters({}),
+    execute: async () => stopMoving(),
+  },
+  {
+    name: 'follow_player',
+    description: 'Follow a player by name for up to durationMs (default 30s).',
+    parameters: buildParameters({
+      username: PARAM.string('Player username to follow.', { required: true }),
+      durationMs: PARAM.number('Maximum follow duration in milliseconds. Default 30000.'),
+    }),
+    execute: async ({ username, durationMs } = {}) => followPlayer({ username, durationMs }),
+  },
+  {
+    name: 'look_at_block',
+    description: 'Look at the block at a coordinate. Returns the block name.',
+    parameters: buildParameters({
+      x: PARAM.number('Block X coordinate.', { required: true }),
+      y: PARAM.number('Block Y coordinate.', { required: true }),
+      z: PARAM.number('Block Z coordinate.', { required: true }),
+    }),
+    execute: async ({ x, y, z } = {}) => lookAtBlock({ position: { x, y, z } }),
+  },
+  {
+    name: 'look_at_position',
+    description: 'Look at an arbitrary point in the world.',
+    parameters: buildParameters({
+      x: PARAM.number('X coordinate.', { required: true }),
+      y: PARAM.number('Y coordinate.', { required: true }),
+      z: PARAM.number('Z coordinate.', { required: true }),
+    }),
+    execute: async ({ x, y, z } = {}) => lookAtPosition({ x, y, z }),
+  },
+  {
+    name: 'mine_block',
+    description: 'Mine a block by name. Searches within range blocks (default 4).',
+    parameters: buildParameters({
+      name: PARAM.string('Block name to mine (e.g. "oak_log", "dirt").', { required: true }),
+      count: PARAM.number('How many blocks to mine. Default 1.'),
+      range: PARAM.number('Search radius in blocks. Default 4.'),
+    }),
+    execute: async ({ name, count, range } = {}) => mineBlock({ name, count, range }),
+  },
+  {
+    name: 'place_block',
+    description: 'Place a block from the bot\'s inventory at a coordinate.',
+    parameters: buildParameters({
+      name: PARAM.string('Block name to place (must be in inventory).', { required: true }),
+      x: PARAM.number('Target X coordinate.', { required: true }),
+      y: PARAM.number('Target Y coordinate.', { required: true }),
+      z: PARAM.number('Target Z coordinate.', { required: true }),
+    }),
+    execute: async ({ name, x, y, z } = {}) => placeBlock({ name, position: { x, y, z } }),
+  },
+  {
+    name: 'find_block',
+    description: 'Find the nearest block of a given name within maxDistance blocks (default 16).',
+    parameters: buildParameters({
+      name: PARAM.string('Block name to search for.', { required: true }),
+      maxDistance: PARAM.number('Search radius in blocks. Default 16.'),
+    }),
+    execute: async ({ name, maxDistance } = {}) => findBlock({ name, maxDistance }),
+  },
+  {
+    name: 'read_chat_history',
+    description: 'Read the last `limit` chat messages (default 20, max 100).',
+    parameters: buildParameters({
+      limit: PARAM.number('How many of the most recent messages to return. Default 20.'),
+    }),
+    execute: async ({ limit } = {}) => readChatHistory({ limit }),
+  },
+  {
+    name: 'scan_nearby_entities',
+    description: 'List nearby entities, optionally filtered by type.',
+    parameters: buildParameters({
+      maxDistance: PARAM.number('Search radius in blocks. Default 32.'),
+      type: PARAM.string('Entity type filter.', {
+        enum: ['all', 'player', 'mob', 'other', 'hostile', 'passive'],
+      }),
+    }),
+    execute: async ({ maxDistance, type } = {}) => scanNearbyEntities({ maxDistance, type }),
+  },
+  {
+    name: 'get_block_info',
+    description: 'Get the block at a coordinate. Returns the block name, type, and metadata.',
+    parameters: buildParameters({
+      x: PARAM.number('Block X coordinate.', { required: true }),
+      y: PARAM.number('Block Y coordinate.', { required: true }),
+      z: PARAM.number('Block Z coordinate.', { required: true }),
+    }),
+    execute: async ({ x, y, z } = {}) => getBlockInfo({ x, y, z }),
+  },
+  {
+    name: 'equip_item',
+    description: 'Equip an item from the bot\'s inventory by name.',
+    parameters: buildParameters({
+      name: PARAM.string('Item name to equip (e.g. "iron_pickaxe").', { required: true }),
+      destination: PARAM.string('Where to equip the item.', {
+        enum: ['hand', 'head', 'torso', 'legs', 'feet', 'off-hand'],
+      }),
+    }),
+    execute: async ({ name, destination } = {}) => equipItem({ name, destination }),
+  },
+  {
+    name: 'drop_item',
+    description: 'Drop an item from the bot\'s inventory. `count` defaults to 1.',
+    parameters: buildParameters({
+      name: PARAM.string('Item name to drop.', { required: true }),
+      count: PARAM.number('How many to drop. Default 1.'),
+    }),
+    execute: async ({ name, count } = {}) => dropItem({ name, count }),
+  },
+  {
+    name: 'use_held_item',
+    description: 'Use the held item (right-click).',
+    parameters: buildParameters({}),
+    execute: async () => useHeldItem(),
+  },
+  {
+    name: 'attack_entity',
+    description: 'Attack an entity by username (player) or entityId (any entity).',
+    parameters: buildParameters({
+      username: PARAM.string('Player username to attack.'),
+      entityId: PARAM.number('Entity id to attack (from scan_nearby_entities).'),
+    }),
+    execute: async ({ username, entityId } = {}) => attackEntity({ username, entityId }),
+  },
+
+  {
     name: 'shutdown',
-    description:
-      'Stop the bot, write a session summary into memories/, and ' +
-      'attempt to commit any promoted improvements to skills/ or ' +
-      'scripts/. Returns a structured result with the summary path ' +
-      'and commit outcome.',
+    description: 'Stop the bot, write a session summary into memories/, and attempt a commit.',
     parameters: buildParameters({
       exitReason: PARAM.string('Why the bot is shutting down.'),
     }),
@@ -273,240 +345,132 @@ export const tools = [
   },
   {
     name: 'create_skill',
-    description:
-      'Write a new file into workspace/skills/. Use kind="code" to ' +
-      'write a .js file, kind="doc" (default) to write a .md file. ' +
-      '**This is a committed modification to shared state. The persona ' +
-      'must call `propose_skill_change` first, get the user\'s explicit ' +
-      'approval in chat, and only then call this tool.** Skills must ' +
-      'be world-agnostic (useful on any offline-mode server) and not ' +
-      'tied to a single build, biome, or coordinate set.',
+    description: 'Write a new file into workspace/skills/. Committed modification; requires propose_skill_change + user approval first.',
     parameters: buildParameters({
-      name: PARAM.string(
-        'Alphanumeric name for the skill (a-z 0-9 _ -).',
-        { required: true }
-      ),
+      name: PARAM.string('Alphanumeric name for the skill (a-z 0-9 _ -).', { required: true }),
       body: PARAM.string('File body to write.', { required: true }),
-      kind: PARAM.string('"doc" (default) or "code".', {
-        enum: ['doc', 'code'],
-      }),
+      kind: PARAM.string('"doc" (default) or "code".', { enum: ['doc', 'code'] }),
     }),
-    execute: async ({ name, body, kind } = {}) =>
-      createSkill({ name, body, kind }),
+    execute: async ({ name, body, kind } = {}) => createSkill({ name, body, kind }),
   },
   {
     name: 'update_skill',
-    description:
-      'Replace the body of an existing skill in workspace/skills/. ' +
-      '**This is a committed modification to shared state. The persona ' +
-      'must call `propose_skill_change` with action=revise or ' +
-      'action=generalize first, get the user\'s explicit approval in ' +
-      'chat, and only then call this tool.** Use this when a skill ' +
-      'has drifted toward server-specificity, is missing a tool ' +
-      'reference, or describes a workflow whose underlying tools have ' +
-      'changed.',
+    description: 'Replace the body of an existing skill in workspace/skills/. Committed modification; requires propose_skill_change + user approval first.',
     parameters: buildParameters({
-      name: PARAM.string(
-        'Alphanumeric name of the skill to update.',
-        { required: true }
-      ),
+      name: PARAM.string('Alphanumeric name of the skill to update.', { required: true }),
       body: PARAM.string('New file body to write.', { required: true }),
-      kind: PARAM.string('"doc" (default) or "code".', {
-        enum: ['doc', 'code'],
-      }),
+      kind: PARAM.string('"doc" (default) or "code".', { enum: ['doc', 'code'] }),
     }),
-    execute: async ({ name, body, kind } = {}) =>
-      updateSkill({ name, body, kind }),
+    execute: async ({ name, body, kind } = {}) => updateSkill({ name, body, kind }),
   },
   {
     name: 'remove_skill',
-    description:
-      'Delete a skill from workspace/skills/. **This is a committed ' +
-      'modification to shared state. The persona must call ' +
-      '`propose_skill_change` with action=remove first, get the user\'s ' +
-      'explicit approval in chat, and only then call this tool.** Use ' +
-      'this when a skill is over-specific to a single server or build, ' +
-      'or when it has been fully superseded by another skill.',
+    description: 'Delete a skill from workspace/skills/. Committed modification; requires propose_skill_change + user approval first.',
     parameters: buildParameters({
-      name: PARAM.string(
-        'Alphanumeric name of the skill to remove.',
-        { required: true }
-      ),
-      kind: PARAM.string('"doc" (default) or "code".', {
-        enum: ['doc', 'code'],
-      }),
+      name: PARAM.string('Alphanumeric name of the skill to remove.', { required: true }),
+      kind: PARAM.string('"doc" (default) or "code".', { enum: ['doc', 'code'] }),
     }),
     execute: async ({ name, kind } = {}) => removeSkill({ name, kind }),
   },
   {
     name: 'propose_skill_change',
-    description:
-      'Write a proposal to memories/proposals/ and return a chat-prompt ' +
-      'string the persona can use to ask the user for approval. **This ' +
-      'is the only way to start a committable change.** The proposal is ' +
-      'gitignored; it never reaches skills/ or scripts/ on its own. ' +
-      'The persona must use the returned `chatPrompt` to ask the user ' +
-      'in chat, and only on explicit approval call `create_skill`, ' +
-      '`update_skill`, or `remove_skill`. All skills must be ' +
-      'world-agnostic — the `reason` field should explain the learning ' +
-      'opportunity, not the specific server or build.',
+    description: 'Write a proposal to memories/proposals/ and return a chat-prompt for the user.',
     parameters: buildParameters({
-      name: PARAM.string(
-        'Alphanumeric skill name the proposal refers to (a-z 0-9 _ -).',
-        { required: true }
-      ),
-      action: PARAM.string(
-        'The kind of change being proposed.',
-        { required: true, enum: ['create', 'revise', 'remove', 'generalize'] }
-      ),
-      body: PARAM.string(
-        'Proposed new body for the skill. Required for create/revise/generalize; ignored for remove.'
-      ),
-      kind: PARAM.string('"doc" (default) or "code".', {
-        enum: ['doc', 'code'],
-      }),
-      summary: PARAM.string(
-        'One-sentence plain-language description of the change.',
-        { required: true }
-      ),
-      reason: PARAM.string(
-        'One- or two-sentence explanation of the learning opportunity that motivated the proposal.',
-        { required: true }
-      ),
+      name: PARAM.string('Alphanumeric skill name (a-z 0-9 _ -).', { required: true }),
+      action: PARAM.string('The kind of change.', { required: true, enum: ['create', 'revise', 'remove', 'generalize'] }),
+      body: PARAM.string('Proposed body. Required for create/revise/generalize; ignored for remove.'),
+      kind: PARAM.string('"doc" (default) or "code".', { enum: ['doc', 'code'] }),
+      summary: PARAM.string('One-sentence description.', { required: true }),
+      reason: PARAM.string('The learning opportunity.', { required: true }),
     }),
     execute: async ({ name, action, body, kind, summary, reason } = {}) =>
       proposeSkillChange({ name, action, body, kind, summary, reason }),
   },
   {
     name: 'list_proposals',
-    description:
-      'List pending skill-change proposals in memories/proposals/. Use ' +
-      'this during a maintenance pass or to find a proposal the user ' +
-      'has not yet responded to.',
+    description: 'List pending skill-change proposals.',
     parameters: buildParameters({}),
     execute: async () => ({ ok: true, proposals: listProposals() }),
   },
   {
     name: 'read_proposal',
-    description:
-      'Read the full markdown body of a pending proposal by its ' +
-      'proposalId (the filename without .md).',
+    description: 'Read a proposal by its proposalId.',
     parameters: buildParameters({
-      proposalId: PARAM.string('Proposal id (filename without .md).', {
-        required: true,
-      }),
+      proposalId: PARAM.string('Proposal id (filename without .md).', { required: true }),
     }),
     execute: async ({ proposalId } = {}) => readProposal(proposalId),
   },
   {
     name: 'reject_proposal',
-    description:
-      'Delete a pending proposal. Use this when the user has ' +
-      'explicitly rejected the change. The proposal is removed from ' +
-      'memories/proposals/; no commit ever happens.',
+    description: 'Delete a pending proposal.',
     parameters: buildParameters({
-      proposalId: PARAM.string('Proposal id (filename without .md).', {
-        required: true,
-      }),
+      proposalId: PARAM.string('Proposal id (filename without .md).', { required: true }),
     }),
     execute: async ({ proposalId } = {}) => rejectProposal(proposalId),
   },
   {
     name: 'create_script',
-    description:
-      'Write a helper script into workspace/scripts/. **This is a ' +
-      'committed modification to shared state. The persona must call ' +
-      '`propose_skill_change` first, get the user\'s explicit ' +
-      'approval in chat, and only then call this tool.** Scripts must ' +
-      'be world-agnostic and not tied to a single server layout.',
+    description: 'Write a helper script into workspace/scripts/. Committed modification; requires propose_skill_change + user approval first.',
     parameters: buildParameters({
-      name: PARAM.string(
-        'Alphanumeric name for the script (a-z 0-9 _ -).',
-        { required: true }
-      ),
+      name: PARAM.string('Alphanumeric name (a-z 0-9 _ -).', { required: true }),
       body: PARAM.string('File body to write.', { required: true }),
     }),
     execute: async ({ name, body } = {}) => createScript({ name, body }),
   },
   {
     name: 'write_memory',
-    description:
-      'Write a note into workspace/memories/ (gitignored, not committed).',
+    description: 'Write a note into workspace/memories/ (gitignored).',
     parameters: buildParameters({
-      name: PARAM.string('Alphanumeric name for the memory file.', {
-        required: true,
-      }),
+      name: PARAM.string('Alphanumeric name.', { required: true }),
       body: PARAM.string('File body to write.', { required: true }),
     }),
     execute: async ({ name, body } = {}) => writeMemory({ name, body }),
   },
   {
     name: 'list_skills',
-    description: 'List the files currently in workspace/skills/.',
+    description: 'List files in workspace/skills/.',
     parameters: buildParameters({}),
     execute: async () => ({ ok: true, skills: listSkills() }),
   },
   {
     name: 'list_scripts',
-    description: 'List the files currently in workspace/scripts/.',
+    description: 'List files in workspace/scripts/.',
     parameters: buildParameters({}),
     execute: async () => ({ ok: true, scripts: listScripts() }),
   },
   {
     name: 'list_memories',
-    description: 'List the files currently in workspace/memories/.',
+    description: 'List files in workspace/memories/.',
     parameters: buildParameters({}),
     execute: async () => ({ ok: true, memories: listMemories() }),
   },
   {
     name: 'read_skill',
-    description:
-      'Read the body of a skill in workspace/skills/. Use this to ' +
-      'pull in a player-written or runtime-written skill before ' +
-      'following its workflow. The persona\'s broad API reaches into ' +
-      'the workspace through the MCP server, so reading a skill is ' +
-      'just a tool call. Returns { ok, body, path, name, kind } on ' +
-      'success, or { ok: false, kind: "not_found" } if the skill is ' +
-      'missing.',
+    description: 'Read the body of a skill.',
     parameters: buildParameters({
-      name: PARAM.string('Alphanumeric skill name (no extension).', {
-        required: true,
-      }),
-      kind: PARAM.string('"doc" (default) or "code".', {
-        enum: ['doc', 'code'],
-      }),
+      name: PARAM.string('Skill name (no extension).', { required: true }),
+      kind: PARAM.string('"doc" (default) or "code".', { enum: ['doc', 'code'] }),
     }),
     execute: async ({ name, kind } = {}) => readSkill({ name, kind }),
   },
   {
     name: 'read_script',
-    description:
-      'Read the body of a helper script in workspace/scripts/. Same ' +
-      'shape as read_skill, scoped to .js scripts.',
+    description: 'Read the body of a script.',
     parameters: buildParameters({
-      name: PARAM.string('Alphanumeric script name (no extension).', {
-        required: true,
-      }),
+      name: PARAM.string('Script name (no extension).', { required: true }),
     }),
     execute: async ({ name } = {}) => readScript({ name }),
   },
   {
     name: 'read_memory',
-    description:
-      'Read a memory file from workspace/memories/. Memories are ' +
-      'gitignored, so this is local-only. Pass the full filename ' +
-      'including the extension (e.g., "last-server.json" or ' +
-      '"session-1.md").',
+    description: 'Read a memory file (full filename including extension).',
     parameters: buildParameters({
-      name: PARAM.string('Memory filename including extension.', {
-        required: true,
-      }),
+      name: PARAM.string('Memory filename including extension.', { required: true }),
     }),
     execute: async ({ name } = {}) => readMemory({ name }),
   },
 ];
 
-// Public lookup helpers.
 export function findTool(name) {
   return tools.find((t) => t.name === name) || null;
 }
@@ -515,23 +479,10 @@ export function findToolsByPrefix(prefix) {
   return tools.filter((t) => t.name.startsWith(prefix));
 }
 
-// Harness-agnostic manifest. Returns a stable list of plain objects with
-// the `execute` function stripped — adapters for any LLM harness can
-// consume this without binding to MineAgent internals.
 export function getToolManifest() {
-  return tools.map(({ name, description, parameters }) => ({
-    name,
-    description,
-    parameters,
-  }));
+  return tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
 }
 
-// The one entry point an LLM harness calls to invoke a tool. Returns a
-// structured `{ ok, error?, kind?, hint? }` shape on failure so the
-// harness can route the error back to the model. The hint is the
-// diagnostic the original feedback asked for: when a tool is missing,
-// the agent learns the right path forward instead of having to fish
-// through source files.
 export async function callTool(name, args = {}) {
   const tool = findTool(name);
   if (!tool) {
@@ -540,10 +491,7 @@ export async function callTool(name, args = {}) {
       ok: false,
       error: `unknown tool: ${name}`,
       kind: 'unknown_tool',
-      hint:
-        `The tool "${name}" is not registered. ` +
-        `Call getToolManifest() (or list_tools) to see the available ` +
-        `tools. Currently registered: ${known}.`,
+      hint: `The tool "${name}" is not registered. Call getToolManifest() (or list_tools) to see the available tools. Currently registered: ${known}.`,
     };
   }
   try {

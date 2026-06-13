@@ -100,11 +100,29 @@ function run(cmd, args, cwd, timeoutMs = GIT_TIMEOUT_MS) {
   });
 }
 
-export async function commitImprovements({ message = null } = {}) {
+/**
+ * Commit pending changes in `workspace/skills/` and `workspace/scripts/`.
+ *
+ * Production callers should leave `cwd` null. The `cwd` parameter exists
+ * for tests: a test that needs to exercise the function without
+ * touching the project repo passes a throwaway git repo's path. A
+ * production caller passing `cwd` from the public surface would
+ * silently point git at the wrong directory, so treat this as
+ * test-only and route production callers through the default path.
+ *
+ * @param {object} [options]
+ * @param {string|null} [options.message] - Optional commit subject.
+ * @param {string|null} [options.cwd] - Test-only override.
+ */
+export async function commitImprovements({ message = null, cwd: cwdOverride = null } = {}) {
   // Run a git commit if there is anything in the workspace to commit. We
   // intentionally limit the commit to skills/ and scripts/ to honor the
   // shutdown rule that session-specific memories stay uncommitted.
-  const cwd = path.resolve(paths.workspaceRoot, '..');
+  //
+  // The `cwd` parameter exists for tests: callers can point the function
+  // at a throwaway git repo so a misbehaving test never produces a real
+  // commit on the project repo. Production code should leave it null.
+  const cwd = cwdOverride || path.resolve(paths.workspaceRoot, '..');
   const status = await run('git', ['status', '--porcelain', 'workspace/skills', 'workspace/scripts'], cwd);
   if (!status.ok) {
     return { ok: false, error: 'git status failed', detail: status.stderr || status.error };

@@ -5,7 +5,7 @@
 // "what's around you?" / "follow me" type requests without reasoning about
 // Mineflayer directly.
 
-import { state, recordAction, snapshot } from '../state.js';
+import { state, snapshot } from '../state.js';
 import { emit, subscribe } from '../events.js';
 import { sendChat } from '../connection.js';
 import { status } from './status.js';
@@ -67,26 +67,40 @@ export async function listenChat({ durationMs = 0, after = null } = {}) {
 }
 
 export function say({ message } = {}) {
-  const text = String(message || '').trim();
-  if (!text) return { ok: false, error: 'message is required' };
-  const result = sendChat(text);
-  // Record the intent regardless of whether the in-game send succeeded
-  // so the observer/CLI can see what the agent tried to say even when
-  // the bot is not connected to a server.
-  recordAction('chat-say', text);
+  if (typeof message !== 'string' || message.trim().length === 0) {
+    return { ok: false, error: 'message is required', kind: 'message_required' };
+  }
+  const text = message.trim();
+  // sendChat() in src/connection.js already records the 'chat' action
+  // and broadcasts the voice event. The single in-world voice path:
+  // convert the NotConnectedError throw into the same envelope the
+  // tool wrapper would return, so callers never need a try/catch.
+  // Unknown errors (no `kind` field) are re-thrown — they are
+  // genuine bugs, not user-facing failures.
+  try {
+    sendChat(text);
+  } catch (err) {
+    if (err && err.kind) {
+      return { ok: false, error: err.message, kind: err.kind };
+    }
+    throw err;
+  }
+  // State snapshot fires only on the success path. A failed send
+  // doesn't change any state worth snapshotting.
   emit('state', snapshot());
-  if (!result.ok) return result;
   return { ok: true, message: text };
 }
 
-export async function handleCommand({ from, message, parsed: preParsed, speak: speakFn } = {}) {
+export async function handleCommand({ from, message, parsed: preParsed } = {}) {
   const parsed = preParsed || parseCommand(message);
   if (!parsed) {
     return { ok: true, handled: false, reason: 'not a command' };
   }
+  // `say` is the single in-world voice: it routes through sendChat,
+  // which auto-broadcasts a voice event to the browser observer for
+  // TTS playback. The persona never needs a separate speak step.
   const reply = async (text) => {
     say({ message: text });
-    if (typeof speakFn === 'function') speakFn(text);
   };
   switch (parsed.name) {
     case '!help':
