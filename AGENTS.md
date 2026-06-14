@@ -348,3 +348,19 @@ What is broken / rough / missing in a way a user would notice:
 
 What is "there" but feels bad to use:
 - The rebase rewrote the hashes of the three commits between the two dropped shutdown commits (Embed browser observer, Add wait_for_chat, Refine block mining) and the dropped commits themselves. Any out-of-tree reference to the old hashes is now invalid; a fresh `git fetch` is the only recovery if the user has a local clone that knew the old commits.
+
+### 2026-06-14 — proposal-timestamp counter, proposalsDir override, hermetic proposal-lifecycle tests
+
+What works:
+- `proposalTimestamp()` in `src/improve.js` appends a per-process monotonic counter to the ISO timestamp. Two `propose_skill_change` calls in the same millisecond can no longer collide on filename; the previous "5ms setTimeout hack" in the implicit-link test is gone. The counter resets on process exit, which is fine — proposals are a per-run artifact.
+- The execute tools (`create_skill`, `update_skill`, `remove_skill`, `create_script`) and the internal helpers (`linkExecutedProposal`, `rewriteProposalStatus`) accept an optional `proposalsDir` override. Production callers (the MCP tool wrappers in `src/tools/index.js`) never pass it, so the production path is unchanged. The override is the only path for tests to exercise the proposal lifecycle without touching the committed `workspace/memories/proposals/` directory.
+- `test/_memories-cleanup.js` has a new `trackProposalsDir(dir)` helper. The first call installs a `process.on('exit')` hook that `rmSync`s every registered dir, so a test that aborts before `finally` cannot leak a throwaway tree.
+- The two `test/shutdown.test.js` lifecycle tests now point `createSkill` at a throwaway `proposalsDir` (`fs.mkdtempSync` + `trackProposalsDir`). The 5ms `setTimeout` between the two `propose_skill_change` calls in the implicit-link test is removed; the per-process counter is the new uniqueness guarantee. `trackMemory()` is also called on the real skill and proposal files for safety, so an aborted test cannot leak `link-test-explicit.md` / `link-test-implicit.md` into the committed workspace.
+- 171/171 tests passing (`npm test`). Smoke check OK (`npm run smoke`).
+
+What is broken / rough / missing in a way a user would notice:
+- The `propose_skill_change` tool itself does not accept a `proposalsDir` override (only the execute tools do). The lifecycle test works around this by calling `propose_skill_change` (which writes to the real proposals dir) and then `fs.copyFileSync`-ing the proposal into the throwaway. The workaround is correct but indirect. A future test that wants to exercise the propose path itself in a throwaway would need a new override on `propose_skill_change` too.
+- The `trackProposalsDir` helper name is specific to proposals dirs, but the implementation (`rmSync` any directory on exit) is generic. If a future test needs to track a non-proposals throwaway dir, the name will be misleading. The current use site is proposals-only, so the name is fine for now.
+
+What is "there" but feels bad to use:
+- The lifecycle tests still write skill files (`link-test-explicit.md`, `link-test-implicit.md`) to the real `workspace/skills/` and clean them up in `finally`. The cleanup is `unlinkSync` plus a `trackMemory()` safety net, but the production path under test is the one that writes to real `workspace/skills/`. A future test that wants full hermeticity would need a `skillsDir` override on `createSkill`/`updateSkill`/etc. (mirror image of the `proposalsDir` work). Not done today because no test currently needs it.

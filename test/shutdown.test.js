@@ -22,7 +22,7 @@ import {
   listApprovedProposals,
   __test_parseProposalFrontmatter,
 } from '../src/improve.js';
-import { trackMemory } from './_memories-cleanup.js';
+import { trackMemory, trackProposalsDir } from './_memories-cleanup.js';
 
 test('writeSessionSummary writes a markdown file into memories/', () => {
   const r = writeSessionSummary({ goal: 'test goal', exitReason: 'unit test' });
@@ -352,16 +352,17 @@ test('__test_parseProposalFrontmatter returns null when no frontmatter', () => {
 });
 
 test('execute tools mark the matching proposal as executed (proposalId explicit)', () => {
-  // This test uses the real workspace, not a throwaway, because the
-  // link helper writes to proposalsDir (which is the real
-  // memories/proposals/). It is hermetic: the proposal is created,
-  // the execute tool runs, the proposal is checked, and the skill
-  // file + proposal are removed in `finally`. The memory file's
-  // own cleanup helper (trackMemory) does not cover the proposals
-  // directory, so this test cleans up explicitly.
+  // Use a throwaway proposals directory so an aborted test does not
+  // leak a `link-test-explicit-<ts>.md` file into the committed
+  // workspace. The skill file is still written to the real
+  // workspace/skills/ (the execute tool is the production path
+  // under test); we track it for `process.on('exit')` cleanup and
+  // also unlink it in `finally`. The throwaway proposals dir is
+  // registered with `trackProposalsDir` so the hook removes it if
+  // the test aborts before `finally` runs.
   const skillsDir = paths.skillsDir;
-  const proposalsDir = paths.proposalsDir;
-  fs.mkdirSync(proposalsDir, { recursive: true });
+  const proposalsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mineagent-proposals-explicit-'));
+  trackProposalsDir(proposalsDir);
   const r = proposeSkillChange({
     name: 'link-test-explicit',
     action: 'create',
@@ -369,20 +370,31 @@ test('execute tools mark the matching proposal as executed (proposalId explicit)
     summary: 's',
     reason: 'r',
   });
-  assert.equal(r.ok, true);
-  const proposalId = r.proposalId;
-  const proposalPath = path.join(proposalsDir, `${proposalId}.md`);
+  // proposeSkillChange writes to the real proposalsDir, not the
+  // throwaway. We have to hand-rewrite the proposal into the
+  // throwaway dir to exercise the link step. Copy the proposal file
+  // into the throwaway and re-derive the proposalId from its
+  // filename.
+  const realProposalPath = r.path;
+  const realProposalId = r.proposalId;
+  const proposalPath = path.join(proposalsDir, `${realProposalId}.md`);
+  fs.copyFileSync(realProposalPath, proposalPath);
+  const proposalId = realProposalId;
   const skillPath = path.join(skillsDir, 'link-test-explicit.md');
+  trackMemory(realProposalPath);
+  trackMemory(skillPath);
   try {
     // Pre-condition: proposal is `proposed`.
     const before = fs.readFileSync(proposalPath, 'utf8');
     assert.match(before, /status: proposed/);
-    // Run the execute tool with the explicit proposalId.
+    // Run the execute tool with the explicit proposalId and the
+    // throwaway proposals dir override.
     const exec = createSkill({
       name: 'link-test-explicit',
       body: '## Body',
       kind: 'doc',
       proposalId,
+      proposalsDir,
     });
     assert.equal(exec.ok, true);
     assert.equal(exec.proposalLinked, true);
@@ -395,20 +407,22 @@ test('execute tools mark the matching proposal as executed (proposalId explicit)
     assert.ok(fs.existsSync(skillPath));
   } finally {
     if (fs.existsSync(skillPath)) fs.unlinkSync(skillPath);
+    if (fs.existsSync(realProposalPath)) fs.unlinkSync(realProposalPath);
     if (fs.existsSync(proposalPath)) fs.unlinkSync(proposalPath);
   }
 });
 
-test('execute tools link the latest matching proposed proposal when no proposalId is passed', async () => {
-  const skillsDir = paths.skillsDir;
-  const proposalsDir = paths.proposalsDir;
-  fs.mkdirSync(proposalsDir, { recursive: true });
-  // Two proposals for the same name. The proposal filename embeds
-  // an ISO timestamp with millisecond precision, so two proposals
-  // created in the same millisecond would collide on filename and
-  // the second would overwrite the first. Wait a tick so the
-  // timestamps are distinct; the test verifies that the newer
+test('execute tools link the latest matching proposed proposal when no proposalId is passed', () => {
+  // Same throwaway proposals dir as the explicit test. Two proposals
+  // for the same name are written in quick succession; the per-
+  // process counter in proposalTimestamp() guarantees distinct
+  // filenames even in the same millisecond, so we no longer need
+  // the 5ms setTimeout hack that the previous version of this test
+  // used to widen the timestamp gap. The test verifies the new
   // proposal is the one that gets linked.
+  const skillsDir = paths.skillsDir;
+  const proposalsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mineagent-proposals-implicit-'));
+  trackProposalsDir(proposalsDir);
   const r1 = proposeSkillChange({
     name: 'link-test-implicit',
     action: 'create',
@@ -416,7 +430,6 @@ test('execute tools link the latest matching proposed proposal when no proposalI
     summary: 's',
     reason: 'r',
   });
-  await new Promise((resolve) => setTimeout(resolve, 5));
   const r2 = proposeSkillChange({
     name: 'link-test-implicit',
     action: 'create',
@@ -426,14 +439,25 @@ test('execute tools link the latest matching proposed proposal when no proposalI
   });
   assert.equal(r1.ok, true);
   assert.equal(r2.ok, true);
+  // Copy both proposals into the throwaway dir so the implicit-link
+  // search finds them there. The execute tool's `proposalsDir`
+  // override scopes the lookup to this dir.
+  const realP1 = r1.path;
+  const realP2 = r2.path;
   const p1 = path.join(proposalsDir, `${r1.proposalId}.md`);
   const p2 = path.join(proposalsDir, `${r2.proposalId}.md`);
+  fs.copyFileSync(realP1, p1);
+  fs.copyFileSync(realP2, p2);
   const skillPath = path.join(skillsDir, 'link-test-implicit.md');
+  trackMemory(realP1);
+  trackMemory(realP2);
+  trackMemory(skillPath);
   try {
     const exec = createSkill({
       name: 'link-test-implicit',
       body: '## Body v2',
       kind: 'doc',
+      proposalsDir,
     });
     assert.equal(exec.ok, true);
     assert.equal(exec.proposalLinked, true);
@@ -447,6 +471,8 @@ test('execute tools link the latest matching proposed proposal when no proposalI
     assert.match(p2Text, /status: executed/);
   } finally {
     if (fs.existsSync(skillPath)) fs.unlinkSync(skillPath);
+    if (fs.existsSync(realP1)) fs.unlinkSync(realP1);
+    if (fs.existsSync(realP2)) fs.unlinkSync(realP2);
     if (fs.existsSync(p1)) fs.unlinkSync(p1);
     if (fs.existsSync(p2)) fs.unlinkSync(p2);
   }

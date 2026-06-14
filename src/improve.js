@@ -35,7 +35,7 @@ function safeName(name) {
   return name;
 }
 
-export function createSkill({ name, body, kind = 'doc', proposalId = null } = {}) {
+export function createSkill({ name, body, kind = 'doc', proposalId = null, proposalsDir: proposalsDirOverride = null } = {}) {
   const safe = safeName(name);
   if (!safe) return { ok: false, error: 'name must be alphanumeric (a-z 0-9 _ -)' };
   if (typeof body !== 'string' || body.length === 0) {
@@ -49,20 +49,23 @@ export function createSkill({ name, body, kind = 'doc', proposalId = null } = {}
   // can recognize the file as approved and commit it. The persona is
   // taught to always call propose_skill_change first; this is the
   // marker that the user said yes and the execute tool ran.
-  const proposalResult = linkExecutedProposal({ proposalId, name: safe, kind });
+  // `proposalsDirOverride` is test-only: production callers leave it
+  // null and the proposal is looked up in the real
+  // workspace/memories/proposals/ dir.
+  const proposalResult = linkExecutedProposal({ proposalId, name: safe, kind, proposalsDir: proposalsDirOverride });
   return { ok: true, path: target, ...(proposalResult || {}) };
 }
 
-export function updateSkill({ name, body, kind = 'doc', proposalId = null } = {}) {
-  // The persona is taught to call propose_skill_change first; this
-  // execute tool is the action the persona takes after the user has
-  // approved. The implementation is identical to createSkill because
-  // the proposal system guarantees the agent does not call this for
-  // an existing skill it does not want to overwrite.
-  return createSkill({ name, body, kind, proposalId });
+// The persona is taught to call propose_skill_change first; this
+// execute tool is the action the persona takes after the user has
+// approved. The implementation is identical to createSkill because
+// the proposal system guarantees the agent does not call this for
+// an existing skill it does not want to overwrite.
+export function updateSkill({ name, body, kind = 'doc', proposalId = null, proposalsDir: proposalsDirOverride = null } = {}) {
+  return createSkill({ name, body, kind, proposalId, proposalsDir: proposalsDirOverride });
 }
 
-export function removeSkill({ name, kind = 'doc', proposalId = null } = {}) {
+export function removeSkill({ name, kind = 'doc', proposalId = null, proposalsDir: proposalsDirOverride = null } = {}) {
   const safe = safeName(name);
   if (!safe) return { ok: false, error: 'name must be alphanumeric (a-z 0-9 _ -)' };
   const filename = kind === 'code' ? `${safe}.js` : `${safe}.md`;
@@ -79,14 +82,14 @@ export function removeSkill({ name, kind = 'doc', proposalId = null } = {}) {
     // handler can commit the deletion. A remove on a missing file
     // still records the proposal link — a future write of the same
     // name will inherit the approved status and be auto-committed.
-    void linkExecutedProposal({ proposalId, name: safe, kind });
+    void linkExecutedProposal({ proposalId, name: safe, kind, proposalsDir: proposalsDirOverride });
     return { ok: true, path: target, removed: existed };
   } catch (err) {
     return { ok: false, error: err.message };
   }
 }
 
-export function createScript({ name, body, proposalId = null } = {}) {
+export function createScript({ name, body, proposalId = null, proposalsDir: proposalsDirOverride = null } = {}) {
   const safe = safeName(name);
   if (!safe) return { ok: false, error: 'name must be alphanumeric (a-z 0-9 _ -)' };
   if (typeof body !== 'string' || body.length === 0) {
@@ -95,7 +98,7 @@ export function createScript({ name, body, proposalId = null } = {}) {
   ensureDir(scriptsDir);
   const target = path.join(scriptsDir, `${safe}.js`);
   fs.writeFileSync(target, body, 'utf8');
-  const proposalResult = linkExecutedProposal({ proposalId, name: safe, kind: 'code' });
+  const proposalResult = linkExecutedProposal({ proposalId, name: safe, kind: 'code', proposalsDir: proposalsDirOverride });
   return { ok: true, path: target, ...(proposalResult || {}) };
 }
 
@@ -289,8 +292,16 @@ function ensureProposalsDir() {
   ensureDir(proposalsDir);
 }
 
+// Per-process monotonic counter appended to the proposal filename so
+// two proposals created in the same millisecond never collide. The
+// ISO timestamp has only millisecond precision; a fast LLM loop or a
+// test that calls propose_skill_change twice in a row would otherwise
+// overwrite the first proposal. The counter resets when the process
+// exits, which is fine — proposals are a per-run artifact.
+let proposalCounter = 0;
 function proposalTimestamp() {
-  return new Date().toISOString().replace(/[:.]/g, '-');
+  proposalCounter += 1;
+  return new Date().toISOString().replace(/[:.]/g, '-') + `-${proposalCounter}`;
 }
 
 export function proposeSkillChange({
@@ -438,11 +449,12 @@ function parseProposalFrontmatter(text) {
   return out;
 }
 
-function rewriteProposalStatus(proposalId, newStatus, executedAt) {
+function rewriteProposalStatus(proposalId, newStatus, executedAt, proposalsDirOverride = null) {
   if (typeof proposalId !== 'string' || !/^[a-z0-9_\-]+$/i.test(proposalId)) {
     return false;
   }
-  const target = path.join(proposalsDir, `${proposalId}.md`);
+  const dir = proposalsDirOverride || proposalsDir;
+  const target = path.join(dir, `${proposalId}.md`);
   if (!fs.existsSync(target)) return false;
   try {
     const stamp = executedAt || new Date().toISOString();
@@ -477,32 +489,33 @@ function rewriteProposalStatus(proposalId, newStatus, executedAt) {
 // proposal was found, or `null` if `proposalId` was not provided and
 // no matching proposal could be resolved (caller decides whether to
 // surface that).
-function linkExecutedProposal({ proposalId, name, kind } = {}) {
+function linkExecutedProposal({ proposalId, name, kind, proposalsDir: proposalsDirOverride = null } = {}) {
+  const dir = proposalsDirOverride || proposalsDir;
   const iso = new Date().toISOString();
   // Path 1: explicit proposalId. Rewrite that proposal's status to
   // `executed` and stamp executedAt.
   if (proposalId) {
-    const ok = rewriteProposalStatus(proposalId, 'executed', iso);
+    const ok = rewriteProposalStatus(proposalId, 'executed', iso, dir);
     return ok
       ? { proposalId, proposalLinked: true }
       : { proposalId: null, proposalLinked: false };
   }
   // Path 2: find the most recent `proposed` proposal whose name
   // matches. The proposal filename is `<name>-<ts>.md` where `ts`
-  // is an ISO timestamp with `.` and `:` replaced by `-`. Because
-  // the proposalTimestamp is monotonic, sorting by the basename
-  // (descending) gives the same result as sorting by mtime, but
-  // without the failure mode of a proposal whose mtime is updated
-  // out-of-band (text editor, `touch`, copy). Two proposals in the
-  // same millisecond would collide on filename; in that case the
-  // newer write wins, which is the correct behavior.
+  // is an ISO timestamp with `.` and `:` replaced by `-`, plus a
+  // per-process counter suffix so two proposals created in the same
+  // millisecond never collide. Because the proposalTimestamp is
+  // monotonic, sorting by the basename (descending) gives the same
+  // result as sorting by mtime, but without the failure mode of a
+  // proposal whose mtime is updated out-of-band (text editor,
+  // `touch`, copy).
   try {
-    if (!fs.existsSync(proposalsDir)) return null;
+    if (!fs.existsSync(dir)) return null;
     const files = fs
-      .readdirSync(proposalsDir)
+      .readdirSync(dir)
       .filter((f) => f.startsWith(`${name}-`) && f.endsWith('.md'))
       .map((f) => {
-        const full = path.join(proposalsDir, f);
+        const full = path.join(dir, f);
         return { full, proposalId: f.replace(/\.md$/, ''), basename: f };
       })
       .sort((a, b) => (a.basename < b.basename ? 1 : a.basename > b.basename ? -1 : 0));
@@ -513,7 +526,7 @@ function linkExecutedProposal({ proposalId, name, kind } = {}) {
       if (fm.status !== 'proposed') continue;
       if (fm.name !== name) continue;
       if (kind && fm.kind && fm.kind !== kind) continue;
-      const ok = rewriteProposalStatus(entry.proposalId, 'executed', iso);
+      const ok = rewriteProposalStatus(entry.proposalId, 'executed', iso, dir);
       return ok
         ? { proposalId: entry.proposalId, proposalLinked: true }
         : { proposalId: null, proposalLinked: false };
