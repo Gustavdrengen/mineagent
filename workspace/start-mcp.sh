@@ -6,7 +6,7 @@
 # The MCP server is the single tool source for the MineAgent OpenCode
 # agent (see .opencode/agents/mineagent.md) and for the test runner. It
 # speaks line-delimited JSON-RPC 2.0 over stdio. OpenCode registers the
-# server through opencode.json at the project root.
+# server through opencode.json in the same directory.
 #
 # The server itself enforces the "one instance at a time" rule on
 # startup: when it boots, it reads the pidfile at

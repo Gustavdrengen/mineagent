@@ -16,8 +16,9 @@ The product vision is in [`VISION.md`](./VISION.md) (user-owned; do not edit fro
    ```bash
    npm install
    ```
-3. **Launch OpenCode from the project root:**
+3. **Launch OpenCode from the `workspace/` directory:**
    ```bash
+   cd workspace
    opencode
    ```
 4. **Select the `mineagent` agent.** If OpenCode shows the agent picker, choose `mineagent` (press `Tab` to cycle primary agents).
@@ -50,7 +51,7 @@ The bot only connects to servers that run in **offline mode** (no Mojang authent
 └──────────────────┘     └──────────────────┘     └──────────────────┘
 ```
 
-- **OpenCode** is the LLM harness. It is the only client that talks to the MineAgent MCP server. The custom MineAgent agent is configured at `.opencode/agents/mineagent.md`.
+- **OpenCode** is the LLM harness. It is the only client that talks to the MineAgent MCP server. The custom MineAgent agent is configured at `workspace/.opencode/agents/mineagent.md` and the MCP server registration is at `workspace/opencode.json`. The user runs `opencode` from `workspace/`.
 - **The MCP server** at `src/mcp-server.js` is the bridge between OpenCode and the Mineflayer code. It speaks line-delimited JSON-RPC 2.0 over stdio and exposes the full tool palette. OpenCode prefixes every tool with the server name, so the agent sees tools like `mineagent_connect_to_server`, `mineagent_send_chat`, and `mineagent_move_to`.
 - **The Mineflayer code** in `src/` does the actual Minecraft work — connection, chat, movement, mining, inventory, pathfinding, observer events.
 
@@ -69,13 +70,13 @@ The persona's in-process loop and the CLI can also call tools directly through `
 - `ui/` — browser observer static UI
 - `workspace/` — the playing agent's home
   - `AGENTS.md` — runtime operating instructions for the playing agent
+  - `opencode.json` — OpenCode config (MCP server registration)
+  - `.opencode/agents/mineagent.md` — custom OpenCode agent
   - `start-mcp.sh` — starts the MCP server (idempotent; OpenCode calls this)
   - `skills/` — reusable behaviors (committed)
   - `scripts/` — reusable helpers (committed)
   - `memories/` — run-local notes (gitignored)
 - `specs/` — behavior contracts (root + per-module)
-- `opencode.json` — OpenCode config (MCP server registration)
-- `.opencode/agents/mineagent.md` — custom OpenCode agent
 
 ## Development
 

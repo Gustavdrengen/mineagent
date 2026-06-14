@@ -128,7 +128,7 @@ Set on the repository, not globally.
 - **Default username is `MineAgent`.** Override via the `set_username` tool.
 - **Memories stay local.** Anything under `workspace/memories/` is gitignored and never committed.
 - **Shutdown commits promote only general improvements.** Session-specific notes stay in `memories/`.
-- **OpenCode is the only harness.** The MCP server, the tool manifest, and the persona are all configured for OpenCode (via `opencode.json` and `.opencode/agents/mineagent.md`). Other harnesses (Codebuff, Claude Desktop, custom adapters) are out of scope.
+- **OpenCode is the only harness.** The MCP server, the tool manifest, and the persona are all configured for OpenCode (via `workspace/opencode.json` and `workspace/.opencode/agents/mineagent.md`). Other harnesses (Codebuff, Claude Desktop, custom adapters) are out of scope. The user runs `opencode` from `workspace/`.
 
 ## Current State of play
 
@@ -251,8 +251,8 @@ What is "there" but feels bad to use:
 
 What works:
 - MineAgent is now driven exclusively by **OpenCode** as its single LLM harness. The MCP server, the tool manifest, and the persona are all configured for OpenCode; other harnesses (Codebuff, Claude Desktop, custom adapters) are out of scope.
-- `opencode.json` at the project root is the OpenCode config. It uses OpenCode's `mcp` key (not the older `mcpServers` key) with `type: "local"` and a `command` array that launches `bash workspace/start-mcp.sh`. OpenCode prefixes every tool with the server name, so the agent sees `mineagent_connect_to_server`, `mineagent_send_chat`, etc.
-- `.opencode/agents/mineagent.md` is the custom OpenCode agent. It has YAML frontmatter (`description`, `mode: primary`, `model`, `temperature`, `steps`, `permission` with `edit: ask`, `bash: ask`, `read: allow`, `websearch: deny`, `mineagent_*: allow`) and a body that is the system prompt. The body sets up the persona, explains the MCP server boundary, and points at `workspace/AGENTS.md` for the full operating manual.
+- `workspace/opencode.json` is the OpenCode config (the user runs `opencode` from `workspace/`). It uses OpenCode's `mcp` key (not the older `mcpServers` key) with `type: "local"` and a `command` array that launches `bash start-mcp.sh` from the same directory. OpenCode prefixes every tool with the server name, so the agent sees `mineagent_connect_to_server`, `mineagent_send_chat`, etc.
+- `workspace/.opencode/agents/mineagent.md` is the custom OpenCode agent. It has YAML frontmatter (`description`, `mode: primary`, `temperature`, `steps`, `permission` with `edit: ask`, `bash: ask`, `read: allow`, `websearch: deny`, `mineagent_*: allow`) and a body that is the system prompt. The `model` field is omitted so the agent inherits the user's globally configured model. The body sets up the persona, explains the MCP server boundary, and points at `workspace/AGENTS.md` for the full operating manual.
 - `workspace/.agents/mcp.json` is removed. The `.agents/` directory is removed too. The start script `workspace/start-mcp.sh` is unchanged and is still the single boot surface.
 - VISION.md's "MCP-Based Tool Surface" section is replaced with "OpenCode MCP Tool Surface". Project layout, design goals, and success criteria updated. The "Harness adapter map" in `specs/tools.md` is removed (OpenCode is the only consumer). `specs/mcp.md` and `specs/tools.md` are updated to mention OpenCode as the single harness.
 - Source comments in `src/mcp-server.js`, `src/tools/index.js`, and `src/persona.js` are updated: the "harness-agnostic" framing is replaced with OpenCode-specific framing. The internal registry still uses `parameters` (the MCP server renames it to `inputSchema` on the wire); that boundary is unchanged.

@@ -73,11 +73,11 @@ In addition to the connection tools, MineAgent should have a **broad in-world ac
 
 ## OpenCode MCP Tool Surface
 
-MineAgent is driven by **OpenCode** as its single LLM harness. OpenCode is the only client that talks to the MineAgent MCP server; the persona is configured as an OpenCode custom agent (see `.opencode/agents/mineagent.md`).
+MineAgent is driven by **OpenCode** as its single LLM harness. OpenCode is the only client that talks to the MineAgent MCP server; the persona is configured as an OpenCode custom agent at `workspace/.opencode/agents/mineagent.md`, and the MCP server is registered in `workspace/opencode.json`. The user runs `opencode` from `workspace/`.
 
 MineAgent exposes its tools through an **MCP (Model Context Protocol) server** at `src/mcp-server.js`. The MCP server is the single bridge between the OpenCode agent and the Mineflayer stack. The agent never calls into `src/` directly; every action flows through a `tools/call` request to the server.
 
-OpenCode registers the MCP server through `opencode.json` at the project root. The config uses OpenCode's `mcp` key (not the older `mcpServers` key) with `type: "local"` and a `command` array that launches the start script. OpenCode prefixes every tool from the server with the server name, so the agent sees tools like `mineagent_connect_to_server`, `mineagent_send_chat`, and `mineagent_move_to` in its tool palette.
+OpenCode registers the MCP server through `opencode.json` in the `workspace/` directory (the playing agent's home). The config uses OpenCode's `mcp` key (not the older `mcpServers` key) with `type: "local"` and a `command` array that launches `start-mcp.sh` from the same directory. OpenCode prefixes every tool from the server with the server name, so the agent sees tools like `mineagent_connect_to_server`, `mineagent_send_chat`, and `mineagent_move_to` in its tool palette.
 
 The server speaks **line-delimited JSON-RPC 2.0 over stdio**, which is the standard MCP transport. It implements the methods OpenCode needs to drive a tool-using agent:
 
@@ -85,7 +85,7 @@ The server speaks **line-delimited JSON-RPC 2.0 over stdio**, which is the stand
 - `tools/list` — returns the tool manifest, with `name`, `description`, and a strict JSON Schema `inputSchema` object per tool (the MCP 2024-11-05 wire format).
 - `tools/call` — invokes a tool by name with arguments; returns the structured `{ content: [{ type: "text", text }], isError }` result.
 
-The server is started by the start script at `workspace/start-mcp.sh`, which the OpenCode config's `command` array references. The server itself enforces **one instance at a time**: on startup it reads the pidfile at `$MINEAGENT_MCP_PIDFILE` (default `.runtime/mcp-server.pid`), sends SIGTERM to any process recorded there, waits up to 2 seconds, and then writes its own PID. This means re-running the start script is always safe; the previous instance is shut down before the new one starts.
+The server is started by the start script at `workspace/start-mcp.sh`, which the OpenCode config's `command` array references (relative to the config's directory, which is `workspace/`). The server itself enforces **one instance at a time**: on startup it reads the pidfile at `$MINEAGENT_MCP_PIDFILE` (default `.runtime/mcp-server.pid`), sends SIGTERM to any process recorded there, waits up to 2 seconds, and then writes its own PID. This means re-running the start script is always safe; the previous instance is shut down before the new one starts.
 
 ### The broad API
 
@@ -136,6 +136,8 @@ MineAgent's playing agent lives in a dedicated workspace subdirectory. The rest 
       docs/
       workspace/                <- the playing agent's home
         AGENTS.md               <- operating instructions for the playing agent
+        opencode.json           <- OpenCode config (MCP server registration)
+        .opencode/agents/mineagent.md  <- custom OpenCode agent
         start-mcp.sh            <- starts the MCP server (idempotent)
         skills/                 <- reusable behaviors
         scripts/                <- reusable helpers (more specific than skills)
@@ -150,6 +152,8 @@ The workspace should be created with a small, clear set of starting contents. Ev
 Starting contents:
 
 - `AGENTS.md` — the operating instructions for the playing agent, including the active persona or role
+- `opencode.json` — the OpenCode config that registers the MCP server (the user runs `opencode` from this directory)
+- `.opencode/agents/mineagent.md` — the custom OpenCode agent definition (system prompt, permissions)
 - `skills/` — a small initial set of general, reusable skills, for example:
   - movement and navigation (walk to coordinates, follow a player, path to a landmark)
   - chat handling (read chat, respond in chat, parse simple commands)
@@ -312,7 +316,7 @@ MineAgent succeeds if it can:
 - keep session-specific work in a gitignored `memories/` folder
 - promote only general improvements into committed `skills/` and `scripts/`
 - shut down cleanly and commit only the useful, general changes
-- expose its tool palette through an MCP server that OpenCode drives, with a custom OpenCode agent at `.opencode/agents/mineagent.md`
+- expose its tool palette through an MCP server that OpenCode drives, with a custom OpenCode agent at `workspace/.opencode/agents/mineagent.md`
 - boot the in-world persona through a single `startPersona()` entry point
 - classify every connection failure into a stable `error.kind` the agent can branch on
 - propose (never unilaterally commit) changes to its shared `skills/` and `scripts/` libraries, after consulting the user

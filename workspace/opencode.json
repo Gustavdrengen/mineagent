@@ -3,7 +3,7 @@
   "mcp": {
     "mineagent": {
       "type": "local",
-      "command": ["bash", "workspace/start-mcp.sh"],
+      "command": ["bash", "start-mcp.sh"],
       "enabled": true,
       "environment": {
         "MINEAGENT_MCP_PIDFILE": ".runtime/mcp-server.pid"

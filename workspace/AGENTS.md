@@ -20,7 +20,7 @@ If a tool you expect to have is missing, call `tools/list` again. If it is genui
 
 ## How the MCP server is started
 
-The MCP server is launched by OpenCode via the start script at `workspace/start-mcp.sh`. OpenCode's MCP config is `opencode.json` at the project root; the `mcp.mineagent` entry tells OpenCode to start the server with `type: "local"` and `command: ["bash", "workspace/start-mcp.sh"]`. The server enforces "one instance at a time" on startup: when it boots, it reads the pidfile at `$MINEAGENT_MCP_PIDFILE` (default `.runtime/mcp-server.pid`), sends SIGTERM to any process recorded there, waits up to 2 seconds, then writes its own PID. This means re-running the start script is always safe.
+The MCP server is launched by OpenCode via the start script at `start-mcp.sh` (relative to this directory). OpenCode's MCP config is `opencode.json` in the same directory; the `mcp.mineagent` entry tells OpenCode to start the server with `type: "local"` and `command: ["bash", "start-mcp.sh"]`. The user runs `opencode` from this directory (`workspace/`). The server enforces "one instance at a time" on startup: when it boots, it reads the pidfile at `$MINEAGENT_MCP_PIDFILE` (default `.runtime/mcp-server.pid`), sends SIGTERM to any process recorded there, waits up to 2 seconds, then writes its own PID. This means re-running the start script is always safe.
 
 If you need to restart the server (e.g., after a code change), just re-run the start script. The previous instance is shut down automatically.
 
