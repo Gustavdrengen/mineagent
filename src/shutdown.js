@@ -27,6 +27,28 @@ function timestamp() {
   return new Date().toISOString().replace(/[:.]/g, '-');
 }
 
+// Defense in depth: even though tests are expected to pass `cwdOverride`
+// pointing at a throwaway repo, also refuse to commit when we detect
+// we're running under a test runner. A future test that forgets the
+// throwaway-repo pattern still cannot produce a real commit on the
+// project repo. The check is conservative: it triggers only when an
+// explicit "this is a test run" signal is present. Production callers
+// (the CLI, the MCP server, the LLM-driven persona) never set any of
+// these env vars, so the production path is unchanged.
+function isTestEnvironment() {
+  if (process.env.MA_TEST_NO_COMMIT === '1') return true;
+  if (process.env.npm_lifecycle_event === 'test') return true;
+  if (process.env.NODE_ENV === 'test') return true;
+  return false;
+}
+
+// Test-only export so the regression test can assert the env-var
+// detection without having to mutate `process.env` from inside a test
+// (which would race with parallel test files).
+export function __test_isTestEnvironment() {
+  return isTestEnvironment();
+}
+
 export function writeSessionSummary({ goal, exitReason } = {}) {
   const memDir = paths.memoriesDir;
   fs.mkdirSync(memDir, { recursive: true });
@@ -110,6 +132,20 @@ function run(cmd, args, cwd, timeoutMs = GIT_TIMEOUT_MS) {
  * silently point git at the wrong directory, so treat this as
  * test-only and route production callers through the default path.
  *
+ * **Decision:** Also refuse to commit when running under a test
+ * environment, even if `cwd` is null. **Tier:** T1. **Evidence:** A
+ * user reported two `shutdown: promote session improvements` commits
+ * appearing in history at 9:02 and 10:32 AM on 2026-06-14, neither of
+ * which was an explicit commit by the user. The state-of-play note
+ * has flagged the auto-commit path as in tension with the
+ * consult-before-commit rule for five entries in a row. The throwaway-
+ * repo pattern in `test/shutdown.test.js` is correct, but a defensive
+ * guard at the source means a future test that forgets the pattern
+ * still cannot produce a real commit. **Trade-off:** Production
+ * behavior is unchanged (production callers never set the env vars
+ * that trigger the guard). A test that wants the old behavior can
+ * unset all three env vars in its setup.
+ *
  * @param {object} [options]
  * @param {string|null} [options.message] - Optional commit subject.
  * @param {string|null} [options.cwd] - Test-only override.
@@ -122,6 +158,17 @@ export async function commitImprovements({ message = null, cwd: cwdOverride = nu
   // The `cwd` parameter exists for tests: callers can point the function
   // at a throwaway git repo so a misbehaving test never produces a real
   // commit on the project repo. Production code should leave it null.
+  //
+  // The `isTestEnvironment()` check is a defense-in-depth layer on top
+  // of that: even if a test forgets the throwaway-repo pattern, it
+  // still cannot produce a real commit against the project repo.
+  if (cwdOverride == null && isTestEnvironment()) {
+    return {
+      ok: true,
+      committed: false,
+      reason: 'test environment: commit suppressed',
+    };
+  }
   const cwd = cwdOverride || path.resolve(paths.workspaceRoot, '..');
   const status = await run('git', ['status', '--porcelain', 'workspace/skills', 'workspace/scripts'], cwd);
   if (!status.ok) {

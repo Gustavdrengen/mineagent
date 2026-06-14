@@ -311,3 +311,17 @@ What is "there" but feels bad to use:
 - The system prompt is long. OpenCode's context window absorbs it comfortably, but the load-bearing loop rule is in section 1 and is repeated in the in-world communication table and the tone paragraph. A future cleanup could collapse the repeats into a single canonical idle-sequence section with cross-references, but the repetition is the right trade-off today: the rule must survive any LLM summarization.
 - The shutdown-handler/commitImprovements tension noted in earlier state-of-play entries is still open. The shutdown path still auto-commits anything in `workspace/skills/` and `workspace/scripts/`. A future cleanup should make it only commit files with a matching approved proposal.
 - The `send_chat` error-kind string match noted in earlier state-of-play entries is still open. The `connection.js` error text could change and silently break the kind inference. A typed error class from `connection.js` would fix this.
+
+### 2026-06-14 — drop spurious shutdown commits, add test-mode guard, continue mining/movement refinement
+
+What works:
+- `src/shutdown.js` `commitImprovements()` is a no-op when running under a test environment (`MA_TEST_NO_COMMIT=1`, `npm_lifecycle_event === 'test'`, or `NODE_ENV === 'test'`). This is defense in depth: even if a future test forgets the throwaway-repo pattern in `test/shutdown.test.js`, it still cannot produce a real commit on the project repo. The check is also exposed as `__test_isTestEnvironment` for direct unit testing.
+- The two spurious `shutdown: promote session improvements` commits (`a889825` and `42762b8`, both at 2026-06-14) have been dropped from history with `git rebase -i`. They only promoted uncommitted changes from a prior session's `workspace/skills/`, and the content they promoted is unchanged. The in-progress refinement changes in the working tree (movement.js + world-interaction.js) were stashed before the rebase and popped back cleanly afterwards.
+- A follow-up refinement to the prior "Refine block mining and movement skills" commit is now committed: `isDestinationSolid` builds a `bot.Vec3` probe (Mineflayer's real `blockAt` is strict about Vec3-shaped input), the move-timeout timer calls `timer.unref()` so a pending move does not keep the test process alive past its natural end, and `mineBlock` uses Mineflayer's atomic `bot.dig(target, true)` (look+dig in one server round trip) and surfaces a `partial: true` flag when the search area was exhausted before the requested count.
+- 161/161 tests passing (`npm test`).
+
+What is broken / rough / missing in a way a user would notice:
+- The root cause of the unwanted shutdown commits is still not fixed: the auto-commit path in `commitImprovements()` still runs when the user calls `npm start` (CLI) and exits, or when an LLM calls `shutdown_bot` via the MCP server. The new test-mode guard only catches the test path. The full fix is still open: either make `commitImprovements()` a no-op unconditionally, or gate it on an env var / approved-proposals lookup. This remains a follow-up.
+
+What is "there" but feels bad to use:
+- The rebase rewrote the hashes of the three commits between the two dropped shutdown commits (Embed browser observer, Add wait_for_chat, Refine block mining) and the dropped commits themselves. Any out-of-tree reference to the old hashes is now invalid; a fresh `git fetch` is the only recovery if the user has a local clone that knew the old commits.

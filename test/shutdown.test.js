@@ -10,6 +10,7 @@ import {
   writeSessionSummary,
   commitImprovements,
   shutdown,
+  __test_isTestEnvironment,
 } from '../src/shutdown.js';
 import { paths } from '../src/improve.js';
 import { trackMemory } from './_memories-cleanup.js';
@@ -55,6 +56,67 @@ test('commitImprovements is a no-op when nothing in skills/scripts changed', asy
     assert.match(r.reason || '', /no changes/);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('__test_isTestEnvironment flips on MA_TEST_NO_COMMIT=1', () => {
+  // Small unit test for the helper so the export is referenced
+  // somewhere in the test suite. The integration test below
+  // ('commitImprovements is a no-op under a test environment')
+  // exercises the end-to-end behavior; this test pins the helper's
+  // contract.
+  //
+  // The helper also checks `npm_lifecycle_event` and `NODE_ENV`,
+  // which `npm test` sets to `'test'` for the entire run. To test
+  // the helper in isolation we clear all three for the duration of
+  // the test and restore them in `finally`. Other tests in this
+  // file do not depend on any of these env vars; sibling test
+  // files run in separate processes (the `node --test` runner
+  // forks per file by default), so the env mutation does not
+  // leak across files.
+  const previousMTC = process.env.MA_TEST_NO_COMMIT;
+  const previousLifecycle = process.env.npm_lifecycle_event;
+  const previousNodeEnv = process.env.NODE_ENV;
+  try {
+    delete process.env.MA_TEST_NO_COMMIT;
+    delete process.env.npm_lifecycle_event;
+    delete process.env.NODE_ENV;
+    assert.equal(__test_isTestEnvironment(), false);
+    process.env.MA_TEST_NO_COMMIT = '1';
+    assert.equal(__test_isTestEnvironment(), true);
+  } finally {
+    if (previousMTC === undefined) delete process.env.MA_TEST_NO_COMMIT;
+    else process.env.MA_TEST_NO_COMMIT = previousMTC;
+    if (previousLifecycle === undefined) delete process.env.npm_lifecycle_event;
+    else process.env.npm_lifecycle_event = previousLifecycle;
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+  }
+});
+
+test('commitImprovements is a no-op under a test environment (defense in depth)', async () => {
+  // The throwaway-repo pattern in the other tests already prevents
+  // commitImprovements from touching the project repo. This test
+  // covers a defense-in-depth layer: even if a future test forgets
+  // the throwaway-repo pattern, the function itself refuses to
+  // commit when `MA_TEST_NO_COMMIT=1` is set. We mutate the env var
+  // for the duration of the test and restore it in `finally` so
+  // other tests in this file are not affected.
+  //
+  // The check is also wired to `npm_lifecycle_event === 'test'` and
+  // `NODE_ENV === 'test'`, but those are process-level and cannot
+  // be toggled from inside a test without leaking into sibling
+  // tests. `MA_TEST_NO_COMMIT` is test-local, so we use it here.
+  const previous = process.env.MA_TEST_NO_COMMIT;
+  process.env.MA_TEST_NO_COMMIT = '1';
+  try {
+    const r = await commitImprovements();
+    assert.equal(r.ok, true);
+    assert.equal(r.committed, false);
+    assert.match(r.reason || '', /test environment/);
+  } finally {
+    if (previous === undefined) delete process.env.MA_TEST_NO_COMMIT;
+    else process.env.MA_TEST_NO_COMMIT = previous;
   }
 });
 
