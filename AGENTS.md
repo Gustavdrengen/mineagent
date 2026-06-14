@@ -231,6 +231,22 @@ What is broken / rough / missing in a way a user would notice:
 What is "there" but feels bad to use:
 - The new wire-format test and the existing manifest test overlap in coverage (both check `inputSchema.type === "object"` and the absence of `execute`). The new test is intentionally stricter — it round-trips through JSON to catch non-serializable values, and it asserts the old `parameters` field is absent. The duplication is a small price for the regression-net property of the new test; it is the one that would have caught this bug.
 
+### 2026-06-14 — rewrite README to reflect OpenCode launch flow
+
+What works:
+- README.md is rewritten end-to-end. The old quick start (`npm start`) was wrong — `npm start` runs the readline CLI, not the OpenCode-driven agent. The new quick start is the actual launch flow: install OpenCode, `npm install`, `opencode` from the project root, select the `mineagent` agent, talk to the bot.
+- README now has seven sections: Quick start, What MineAgent does, How it works (with an ASCII architecture diagram), Repository layout, Development, Documentation, Requirements. The two-part project structure (playing agent in `workspace/` vs implementation in `src/`+`server/`+`ui/`) is stated up front.
+- The CLI (`node src/index.js` / `npm start`) is correctly described in the Development section as a thin readline wrapper for humans who want to drive without OpenCode. OpenCode is the primary driver.
+- The "What MineAgent does" list mirrors the VISION.md success criteria. The Repository layout section points at the new OpenCode-specific files (`opencode.json`, `.opencode/agents/mineagent.md`).
+- The "Requirements" section calls out Node 20+, an offline-mode Minecraft server, and OpenCode installed and authenticated. No more "just npm install and go".
+- 122/122 tests passing (`npm test`). Smoke check OK (`npm run smoke`).
+
+What is broken / rough / missing in a way a user would notice:
+- None new. The shutdown-handler/commitImprovements tension and the `send_chat` error-kind string match noted in earlier state-of-play entries are still open.
+
+What is "there" but feels bad to use:
+- The ASCII architecture diagram uses box-drawing characters that may not render correctly in all terminal widths. A future cleanup could swap it for a mermaid diagram or a plain-text description, but the current diagram is readable in the typical 100-column terminal and in GitHub's markdown renderer.
+
 ### 2026-06-14 — switch from harness-agnostic MCP to OpenCode-only
 
 What works:
