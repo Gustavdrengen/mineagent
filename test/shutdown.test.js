@@ -12,7 +12,16 @@ import {
   shutdown,
   __test_isTestEnvironment,
 } from '../src/shutdown.js';
-import { paths } from '../src/improve.js';
+import {
+  paths,
+  proposeSkillChange,
+  createSkill,
+  updateSkill,
+  removeSkill,
+  createScript,
+  listApprovedProposals,
+  __test_parseProposalFrontmatter,
+} from '../src/improve.js';
 import { trackMemory } from './_memories-cleanup.js';
 
 test('writeSessionSummary writes a markdown file into memories/', () => {
@@ -147,6 +156,376 @@ test('commitImprovements actually commits when a new file is added', async () =>
     assert.match(log.stdout, /shutdown: add sample skill/);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// --- The new commit-by-approved-proposal behavior ----------------------
+//
+// The shutdown handler used to commit every changed file in
+// workspace/skills/ and workspace/scripts/ unconditionally. That was
+// in tension with the consult-before-commit rule. The new behavior
+// is: only commit files whose basename matches a proposal in
+// memories/proposals/ whose frontmatter status is `executed` (set by
+// the execute tool when the persona calls it after the user said
+// yes). Unapproved files are left in the working tree and reported
+// in the result.
+//
+// These tests build a throwaway git repo with workspace/skills/ and
+// workspace/memories/proposals/ inside it, write the files we want to
+// commit, and assert against the production commitImprovements() via
+// the cwd override.
+
+function setupThrowawayRepo() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mineagent-shutdown-approved-'));
+  const skills = path.join(tmp, 'workspace', 'skills');
+  const scripts = path.join(tmp, 'workspace', 'scripts');
+  const proposals = path.join(tmp, 'workspace', 'memories', 'proposals');
+  fs.mkdirSync(skills, { recursive: true });
+  fs.mkdirSync(scripts, { recursive: true });
+  fs.mkdirSync(proposals, { recursive: true });
+  const init = runGit(['init', '-q'], tmp);
+  assert.equal(init.code, 0, `git init failed: ${init.stderr}`);
+  // git complains about "fatal: unable to auto-detect email address"
+  // when the committer identity is not configured. The production
+  // helper sets GIT_AUTHOR_* / GIT_COMMITTER_*; do the same here.
+  runGit(['config', 'user.email', 'mineagent-agent@local'], tmp);
+  runGit(['config', 'user.name', 'MineAgent Agent'], tmp);
+  return { tmp, skills, scripts, proposals };
+}
+
+function writeProposal(proposalsDir, { name, status = 'proposed', kind = 'doc' }) {
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  const filename = `${name}-${ts}.md`;
+  const fullPath = path.join(proposalsDir, filename);
+  const body = [
+    '---',
+    `name: ${name}`,
+    `action: create`,
+    `kind: ${kind}`,
+    `proposedAt: ${new Date().toISOString()}`,
+    `status: ${status}`,
+    '---',
+    '',
+    `# Proposal: create ${name}`,
+    '',
+    '## Summary',
+    's',
+    '',
+    '## Reason',
+    'r',
+    '',
+  ].join('\n');
+  fs.writeFileSync(fullPath, body, 'utf8');
+  return { filename, fullPath, proposalId: filename.replace(/\.md$/, '') };
+}
+
+test('commitImprovements only commits files with an approved proposal', async () => {
+  const { tmp, skills, proposals } = setupThrowawayRepo();
+  try {
+    // Two skills: one approved, one not.
+    fs.writeFileSync(path.join(skills, 'approved-skill.md'), '# approved\n', 'utf8');
+    fs.writeFileSync(path.join(skills, 'unapproved-skill.md'), '# unapproved\n', 'utf8');
+    writeProposal(proposals, { name: 'approved-skill', status: 'executed' });
+    // No proposal for `unapproved-skill`.
+
+    const r = await commitImprovements({ cwd: tmp, proposalsDir: proposals });
+    assert.equal(r.ok, true);
+    assert.equal(r.committed, true);
+    assert.deepEqual(r.committedFiles, ['workspace/skills/approved-skill.md']);
+    assert.deepEqual(r.unapproved, ['workspace/skills/unapproved-skill.md']);
+    // The unapproved file is still in the working tree (not removed).
+    assert.ok(fs.existsSync(path.join(skills, 'unapproved-skill.md')));
+    // The approved file is no longer in the working tree's uncommitted
+    // set (git committed it). Use `--untracked-files=all` so the
+    // unapproved file is shown by name (the default `normal` mode
+    // hides it inside the directory entry `?? workspace/skills/`).
+    const status = runGit(
+      ['status', '--porcelain', '--untracked-files=all', 'workspace/skills'],
+      tmp
+    );
+    assert.equal(status.code, 0, `git status failed: ${status.stderr}`);
+    // The unapproved file is still untracked; the approved file is
+    // committed. Use a line-by-line check anchored to the full path
+    // so the substring "approved-skill.md" inside the literal
+    // "unapproved-skill.md" does not produce a false positive.
+    const statusLines = status.stdout.split('\n').filter(Boolean);
+    assert.ok(
+      statusLines.some((l) => l.includes('workspace/skills/unapproved-skill.md')),
+      'unapproved-skill.md should still be in the working tree'
+    );
+    assert.equal(
+      statusLines.some((l) => l.includes('workspace/skills/approved-skill.md')),
+      false,
+      'approved-skill.md should have been committed and not appear in the working tree'
+    );
+    // And the commit log has the new commit.
+    const log = runGit(['log', '--oneline'], tmp);
+    assert.equal(log.code, 0, `git log failed: ${log.stderr}`);
+    assert.match(log.stdout, /shutdown: apply approved skill changes/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('commitImprovements leaves every change unapproved when no proposal matches', async () => {
+  const { tmp, skills, proposals } = setupThrowawayRepo();
+  try {
+    fs.writeFileSync(path.join(skills, 'lonely.md'), '# lonely\n', 'utf8');
+    const r = await commitImprovements({ cwd: tmp, proposalsDir: proposals });
+    assert.equal(r.ok, true);
+    assert.equal(r.committed, false);
+    assert.match(r.reason || '', /unapproved changes left in working tree/);
+    assert.deepEqual(r.unapproved, ['workspace/skills/lonely.md']);
+    // `git log` returns 128 in an empty repo (no commits yet); the
+    // right check here is that no commit subject landed. Use
+    // `git rev-parse --verify HEAD` (returns 0/1) instead of `log`
+    // so the assertion does not depend on whether the throwaway
+    // repo already has commits.
+    const rev = runGit(['rev-parse', '--verify', 'HEAD'], tmp);
+    assert.notEqual(rev.code, 0, 'no HEAD should exist when nothing was committed');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('commitImprovements counts both .md and .js skills, and .js scripts', async () => {
+  const { tmp, skills, scripts, proposals } = setupThrowawayRepo();
+  try {
+    fs.writeFileSync(path.join(skills, 'js-skill.js'), '// js\n', 'utf8');
+    fs.writeFileSync(path.join(scripts, 'js-script.js'), '// script\n', 'utf8');
+    writeProposal(proposals, { name: 'js-skill', status: 'executed', kind: 'code' });
+    writeProposal(proposals, { name: 'js-script', status: 'executed', kind: 'code' });
+    const r = await commitImprovements({ cwd: tmp, proposalsDir: proposals });
+    assert.equal(r.ok, true);
+    assert.equal(r.committed, true);
+    assert.equal(r.committedFiles.length, 2);
+    assert.ok(r.committedFiles.includes('workspace/skills/js-skill.js'));
+    assert.ok(r.committedFiles.includes('workspace/scripts/js-script.js'));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('MA_SHUTDOWN_FORCE_COMMIT=1 commits every changed file (escape hatch)', async () => {
+  const { tmp, skills } = setupThrowawayRepo();
+  // Use a child env so the env mutation does not leak across tests.
+  const previous = process.env.MA_SHUTDOWN_FORCE_COMMIT;
+  process.env.MA_SHUTDOWN_FORCE_COMMIT = '1';
+  try {
+    fs.writeFileSync(path.join(skills, 'unapproved-skill.md'), '# x\n', 'utf8');
+    const r = await commitImprovements({ cwd: tmp });
+    assert.equal(r.ok, true);
+    assert.equal(r.committed, true);
+    assert.ok(r.committedFiles.includes('workspace/skills/unapproved-skill.md'));
+    // With the force flag, the proposal filter is bypassed. No
+    // files are unapproved, so `unapproved` is an empty array (the
+    // shape is consistent with the non-force path).
+    assert.deepEqual(r.unapproved, []);
+  } finally {
+    if (previous === undefined) delete process.env.MA_SHUTDOWN_FORCE_COMMIT;
+    else process.env.MA_SHUTDOWN_FORCE_COMMIT = previous;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('__test_parseProposalFrontmatter reads status and name', () => {
+  const text = [
+    '---',
+    'name: foo',
+    'action: create',
+    'kind: doc',
+    'proposedAt: 2026-06-14T00:00:00.000Z',
+    'status: executed',
+    '---',
+    '',
+    '# body',
+  ].join('\n');
+  const fm = __test_parseProposalFrontmatter(text);
+  assert.equal(fm.name, 'foo');
+  assert.equal(fm.status, 'executed');
+  assert.equal(fm.action, 'create');
+  assert.equal(fm.kind, 'doc');
+});
+
+test('__test_parseProposalFrontmatter returns null when no frontmatter', () => {
+  assert.equal(__test_parseProposalFrontmatter('just a body\n'), null);
+});
+
+test('execute tools mark the matching proposal as executed (proposalId explicit)', () => {
+  // This test uses the real workspace, not a throwaway, because the
+  // link helper writes to proposalsDir (which is the real
+  // memories/proposals/). It is hermetic: the proposal is created,
+  // the execute tool runs, the proposal is checked, and the skill
+  // file + proposal are removed in `finally`. The memory file's
+  // own cleanup helper (trackMemory) does not cover the proposals
+  // directory, so this test cleans up explicitly.
+  const skillsDir = paths.skillsDir;
+  const proposalsDir = paths.proposalsDir;
+  fs.mkdirSync(proposalsDir, { recursive: true });
+  const r = proposeSkillChange({
+    name: 'link-test-explicit',
+    action: 'create',
+    body: '## Body',
+    summary: 's',
+    reason: 'r',
+  });
+  assert.equal(r.ok, true);
+  const proposalId = r.proposalId;
+  const proposalPath = path.join(proposalsDir, `${proposalId}.md`);
+  const skillPath = path.join(skillsDir, 'link-test-explicit.md');
+  try {
+    // Pre-condition: proposal is `proposed`.
+    const before = fs.readFileSync(proposalPath, 'utf8');
+    assert.match(before, /status: proposed/);
+    // Run the execute tool with the explicit proposalId.
+    const exec = createSkill({
+      name: 'link-test-explicit',
+      body: '## Body',
+      kind: 'doc',
+      proposalId,
+    });
+    assert.equal(exec.ok, true);
+    assert.equal(exec.proposalLinked, true);
+    assert.equal(exec.proposalId, proposalId);
+    // Post-condition: proposal is `executed` and has an executedAt.
+    const after = fs.readFileSync(proposalPath, 'utf8');
+    assert.match(after, /status: executed/);
+    assert.match(after, /executedAt: \d{4}-\d{2}-\d{2}/);
+    // And the skill file is on disk.
+    assert.ok(fs.existsSync(skillPath));
+  } finally {
+    if (fs.existsSync(skillPath)) fs.unlinkSync(skillPath);
+    if (fs.existsSync(proposalPath)) fs.unlinkSync(proposalPath);
+  }
+});
+
+test('execute tools link the latest matching proposed proposal when no proposalId is passed', async () => {
+  const skillsDir = paths.skillsDir;
+  const proposalsDir = paths.proposalsDir;
+  fs.mkdirSync(proposalsDir, { recursive: true });
+  // Two proposals for the same name. The proposal filename embeds
+  // an ISO timestamp with millisecond precision, so two proposals
+  // created in the same millisecond would collide on filename and
+  // the second would overwrite the first. Wait a tick so the
+  // timestamps are distinct; the test verifies that the newer
+  // proposal is the one that gets linked.
+  const r1 = proposeSkillChange({
+    name: 'link-test-implicit',
+    action: 'create',
+    body: '## Body v1',
+    summary: 's',
+    reason: 'r',
+  });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const r2 = proposeSkillChange({
+    name: 'link-test-implicit',
+    action: 'create',
+    body: '## Body v2',
+    summary: 's',
+    reason: 'r',
+  });
+  assert.equal(r1.ok, true);
+  assert.equal(r2.ok, true);
+  const p1 = path.join(proposalsDir, `${r1.proposalId}.md`);
+  const p2 = path.join(proposalsDir, `${r2.proposalId}.md`);
+  const skillPath = path.join(skillsDir, 'link-test-implicit.md');
+  try {
+    const exec = createSkill({
+      name: 'link-test-implicit',
+      body: '## Body v2',
+      kind: 'doc',
+    });
+    assert.equal(exec.ok, true);
+    assert.equal(exec.proposalLinked, true);
+    // The newer proposal (r2) is the one that was linked.
+    assert.equal(exec.proposalId, r2.proposalId);
+    // The older proposal is untouched.
+    const p1Text = fs.readFileSync(p1, 'utf8');
+    assert.match(p1Text, /status: proposed/);
+    // The newer proposal is `executed`.
+    const p2Text = fs.readFileSync(p2, 'utf8');
+    assert.match(p2Text, /status: executed/);
+  } finally {
+    if (fs.existsSync(skillPath)) fs.unlinkSync(skillPath);
+    if (fs.existsSync(p1)) fs.unlinkSync(p1);
+    if (fs.existsSync(p2)) fs.unlinkSync(p2);
+  }
+});
+
+test('listApprovedProposals returns only proposals with status=executed', () => {
+  const proposalsDir = paths.proposalsDir;
+  fs.mkdirSync(proposalsDir, { recursive: true });
+  // Three proposals; only the `executed` ones should appear in the
+  // list. The test does not care which other statuses are present
+  // (proposed, rejected-after-creation, etc.) — it just asserts
+  // every entry in the result has status executed.
+  const r1 = proposeSkillChange({
+    name: 'list-approved-1',
+    action: 'create',
+    body: 'b',
+    summary: 's',
+    reason: 'r',
+  });
+  const r2 = proposeSkillChange({
+    name: 'list-approved-2',
+    action: 'create',
+    body: 'b',
+    summary: 's',
+    reason: 'r',
+  });
+  const r3 = proposeSkillChange({
+    name: 'list-approved-3',
+    action: 'create',
+    body: 'b',
+    summary: 's',
+    reason: 'r',
+  });
+  const p1 = path.join(proposalsDir, `${r1.proposalId}.md`);
+  const p2 = path.join(proposalsDir, `${r2.proposalId}.md`);
+  const p3 = path.join(proposalsDir, `${r3.proposalId}.md`);
+  try {
+    // Mark r1 and r3 as executed (not r2).
+    const stamp = new Date().toISOString();
+    fs.writeFileSync(
+      p1,
+      fs.readFileSync(p1, 'utf8').replace(/^status:\s*proposed$/m, 'status: executed'),
+      'utf8'
+    );
+    fs.writeFileSync(
+      p3,
+      fs.readFileSync(p3, 'utf8')
+        .replace(/^status:\s*proposed$/m, 'status: executed')
+        .replace(/\n(?!.*executedAt)/s, `\nexecutedAt: ${stamp}\n`),
+      'utf8'
+    );
+    const names = listApprovedProposals();
+    assert.ok(names.includes('list-approved-1'), 'list-approved-1 should be approved');
+    assert.ok(names.includes('list-approved-3'), 'list-approved-3 should be approved');
+    assert.equal(names.includes('list-approved-2'), false, 'list-approved-2 is still proposed');
+  } finally {
+    if (fs.existsSync(p1)) fs.unlinkSync(p1);
+    if (fs.existsSync(p2)) fs.unlinkSync(p2);
+    if (fs.existsSync(p3)) fs.unlinkSync(p3);
+  }
+});
+
+test('listApprovedProposals reads from an explicit proposalsDir override', () => {
+  // The shutdown handler and the persona loop both need to be able to
+  // ask "which names have an approved proposal?" against a specific
+  // directory. In production that's the real workspace proposals dir;
+  // in tests it can be a throwaway. The override path keeps the two
+  // callers on the same code path.
+  const { proposals } = setupThrowawayRepo();
+  try {
+    writeProposal(proposals, { name: 'override-foo', status: 'executed' });
+    writeProposal(proposals, { name: 'override-bar', status: 'proposed' });
+    const names = listApprovedProposals(proposals);
+    assert.ok(names.includes('override-foo'), 'override-foo is executed');
+    assert.equal(names.includes('override-bar'), false, 'override-bar is still proposed');
+  } finally {
+    for (const f of fs.readdirSync(proposals)) {
+      fs.unlinkSync(path.join(proposals, f));
+    }
   }
 });
 
