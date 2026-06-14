@@ -66,7 +66,7 @@ The persona's in-process loop and the CLI can also call tools directly through `
   - `connection.js`, `state.js`, `events.js`, `improve.js` — supporting modules
   - `tools/` — tool registry (`getToolManifest`, `callTool`)
   - `skills/` — skills exposed to the agent loop (movement, world interaction, in-world, chat, status)
-- `server/` — browser observer HTTP/WS server
+- `server/` — browser observer module (embedded in the MCP server; not a standalone process)
 - `ui/` — browser observer static UI
 - `workspace/` — the playing agent's home
   - `AGENTS.md` — runtime operating instructions for the playing agent
@@ -83,8 +83,10 @@ The persona's in-process loop and the CLI can also call tools directly through `
 ```bash
 npm test           # run the test suite (Node built-in test runner)
 npm run smoke      # verify the entry point loads
-npm run observer   # start the browser observer on :3000
+npm run mcp        # start the MCP server (also embeds the browser observer on :3000 by default)
 ```
+
+The browser observer is embedded in the MCP server, so `npm run mcp` is the only command needed to see the live agent state at `http://localhost:3000/`. Set `MA_OBSERVER_PORT=0` to disable the observer, or `MA_OBSERVER_PORT=<other>` if 3000 is taken. Set `MA_OBSERVER_HOST=0.0.0.0` to view from another machine on the LAN (the default is `127.0.0.1`, localhost only).
 
 The CLI (`node src/index.js`, or `npm start`) is a thin readline wrapper around `startPersona` for humans who want to drive the bot interactively from a terminal without OpenCode. OpenCode is the primary driver.
 

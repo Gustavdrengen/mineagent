@@ -11,9 +11,8 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node --test test/events.test.js test/state.test.js test/tools.test.js test/connection.test.js test/skills.test.js test/agent.test.js test/persona.test.js test/improve.test.js test/shutdown.test.js test/mcp-server.test.js",
+    "test": "node --test test/events.test.js test/state.test.js test/tools.test.js test/connection.test.js test/skills.test.js test/agent.test.js test/persona.test.js test/improve.test.js test/shutdown.test.js test/mcp-server.test.js test/observer.test.js",
     "smoke": "node test/smoke.js",
-    "observer": "node server/index.js",
     "mcp": "bash workspace/start-mcp.sh"
   },
   "dependencies": {

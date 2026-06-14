@@ -15,7 +15,7 @@ MineAgent is a Minecraft playing agent that joins offline-mode servers through M
 5. **Workspace is the playing agent's home.** `workspace/` contains the runtime `AGENTS.md`, `skills/`, `scripts/`, and `memories/`.
 6. **Memories are gitignored.** Anything in `workspace/memories/` stays local.
 7. **Shutdown commits promote only general improvements.** Session-specific work stays in `memories/`.
-8. **Browser observer exists.** A static UI is served by `server/index.js` and reads from `/status`.
+8. **Browser observer is embedded in the MCP server.** The observer is a window into the agent's in-process state and event bus, not a separate process. Running it as a separate process would always show "disconnected" because in-process state is not shared across processes. Default URL: `http://localhost:3000/`. Gated by `MA_OBSERVER_PORT` (default 3000, `0` to disable) and `MA_OBSERVER_HOST` (default `127.0.0.1`).
 
 ## Connection model
 

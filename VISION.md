@@ -278,6 +278,10 @@ The UI should display:
 
 This is an observer console, not a replacement game client.
 
+The observer is **embedded in the MCP server**, not a separate process. The agent's process owns the bot state and the event bus, and the observer is a window into it. Running the observer as a separate process would always show "disconnected" because in-process state is not shared across processes. The embedded observer is the only correct way to see live agent state; there is no separate observer script.
+
+The browser opens the observer URL (default `http://localhost:3000/`, configurable via `MA_OBSERVER_PORT`) and sees a live stream of every event the connection layer emits. The observer binds to `127.0.0.1` by default (localhost only); set `MA_OBSERVER_HOST=0.0.0.0` to view from another machine on the LAN. A port conflict is logged as a warning; the MCP server is the load-bearing piece and keeps running either way.
+
 ## Shutdown Behavior
 
 When the player tells the bot to shut down, MineAgent should:

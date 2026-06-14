@@ -43,6 +43,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { getToolManifest, callTool } from './tools/index.js';
+import { startObserverServer } from '../server/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
@@ -315,6 +316,15 @@ export async function startMcpServer({
   output = process.stdout,
   logger = null,
   pidfile: pidfileOverride = null,
+  // Observer configuration. The observer is **embedded in the MCP
+  // server** so the agent's process owns the bot state and the events;
+  // running it as a separate process would always show "disconnected"
+  // because in-process state is not shared across processes. Pass
+  // `observer: false` to skip starting it (e.g. in tests), or pass an
+  // object with `port` / `host` to override the defaults. The port
+  // defaults to MA_OBSERVER_PORT (env var) or 3000; pass 0 for an
+  // ephemeral port.
+  observer = true,
 } = {}) {
   const pidfile = resolvePidfile(pidfileOverride);
   if (shutdownExisting) {
@@ -352,12 +362,76 @@ export async function startMcpServer({
   input.on('data', onData);
   input.on('end', onEnd);
 
+  // Start the embedded observer unless the caller opted out. The
+  // observer is best-effort: a port conflict (e.g. another instance
+  // already bound, or the user has something else on 3000) should not
+  // prevent the MCP server from running, because the MCP server is
+  // the load-bearing piece and the observer is a window into it.
+  let observerHandle = null;
+  if (observer !== false) {
+    const observerOpts =
+      typeof observer === 'object' && observer !== null ? observer : {};
+    // Env-var port resolution. Only finite, non-zero numeric values
+    // are honored: a non-numeric value (e.g. `MA_OBSERVER_PORT=off`)
+    // would otherwise become NaN, fail to bind, and surface as a
+    // confusing "failed to start" warning. `MA_OBSERVER_PORT=0` is
+    // the documented way to disable the observer. An ephemeral port
+    // would also be 0, but the observer logs its bound port to the
+    // user — a moving-target port is not useful here. The test
+    // surface uses the programmatic `observer: false` instead.
+    const envPortRaw = process.env.MA_OBSERVER_PORT;
+    const envPortNumeric = envPortRaw != null ? Number(envPortRaw) : null;
+    const envPort =
+      Number.isFinite(envPortNumeric) && envPortNumeric > 0
+        ? envPortNumeric
+        : null;
+    const observerDisabled = envPortRaw != null && envPort == null && envPortRaw !== '';
+    // `envPort == null && envPortRaw !== ''` means the env var was
+    // set to a non-numeric, non-zero value (e.g. "off"). Treat that
+    // as a disable. An empty string is a no-op (falls through to
+    // defaults).
+    if (!observerDisabled) {
+      try {
+        observerHandle = await startObserverServer({
+          port: observerOpts.port ?? envPort ?? 3000,
+          host: observerOpts.host ?? process.env.MA_OBSERVER_HOST ?? '127.0.0.1',
+          logger,
+        });
+      } catch (err) {
+        // Log a warning but do not fail the MCP server boot. The agent
+        // can still be driven from OpenCode; the user just loses the
+        // browser view until the port is freed.
+        if (logger) {
+          logger(
+            `[observer] failed to start on the configured port: ${err.message}. ` +
+              'The MCP server is still running; set MA_OBSERVER_PORT to a free port ' +
+              'and restart to enable the observer.'
+          );
+        } else {
+          process.stderr.write(
+            `[observer] failed to start: ${err.message}\n` +
+              'The MCP server is still running; set MA_OBSERVER_PORT to a free port ' +
+              'and restart to enable the observer.\n'
+          );
+        }
+      }
+    }
+  }
+
   return {
     pidfile,
     pid: process.pid,
-    stop: () => {
+    observer: observerHandle,
+    stop: async () => {
       input.off('data', onData);
       input.off('end', onEnd);
+      if (observerHandle) {
+        try {
+          await observerHandle.stop();
+        } catch {
+          // ignore
+        }
+      }
       try {
         const recorded = readPidfile(pidfile);
         if (recorded === process.pid) {

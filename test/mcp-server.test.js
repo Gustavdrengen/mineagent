@@ -9,6 +9,11 @@
 // in-process Readable, the pidfile, and any spawned child are cleaned
 // up even when an assertion fails. A leaked handle keeps the test
 // runner alive until its hard timeout, which masks real test failures.
+//
+// In-process tests opt out of the embedded observer via
+// `observer: false`. The observer has its own dedicated test surface
+// in test/observer.test.js; here we only want to exercise the JSON-RPC
+// plumbing.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -98,14 +103,15 @@ test('startMcpServer writes a pidfile and removes it on stop', async () => {
       input: stdin,
       output: stdout,
       pidfile,
+      observer: false,
     });
     assert.equal(handle.pid, process.pid);
     assert.equal(handle.pidfile, pidfile, 'handle should report the pidfile it used');
     assert.equal(existsSync(pidfile), true, 'pidfile should exist after start');
-    handle.stop();
+    await handle.stop();
     assert.equal(existsSync(pidfile), false, 'pidfile should be removed on stop');
   } finally {
-    try { handle?.stop(); } catch { /* ignore */ }
+    try { await handle?.stop(); } catch { /* ignore */ }
     try { stdin.destroy(); } catch { /* ignore */ }
     rmSync(dir, { recursive: true, force: true });
   }
@@ -124,6 +130,7 @@ test('initialize returns protocolVersion, capabilities, and serverInfo', async (
       input: stdin,
       output: stdout,
       pidfile: join(dir, 'pid'),
+      observer: false,
     });
     writeRequest(stdin, 1, 'initialize', {
       protocolVersion: '2024-11-05',
@@ -140,7 +147,7 @@ test('initialize returns protocolVersion, capabilities, and serverInfo', async (
     assert.equal(response.result.serverInfo.name, 'mineagent');
     assert.ok(response.result.serverInfo.version, 'version should be present');
   } finally {
-    try { handle?.stop(); } catch { /* ignore */ }
+    try { await handle?.stop(); } catch { /* ignore */ }
     try { stdin.destroy(); } catch { /* ignore */ }
     rmSync(dir, { recursive: true, force: true });
   }
@@ -159,6 +166,7 @@ test('tools/list returns the manifest without execute', async () => {
       input: stdin,
       output: stdout,
       pidfile: join(dir, 'pid'),
+      observer: false,
     });
     writeRequest(stdin, 2, 'tools/list');
     await settle();
@@ -189,7 +197,7 @@ test('tools/list returns the manifest without execute', async () => {
       assert.ok(names.includes(expected), `manifest should include ${expected}`);
     }
   } finally {
-    try { handle?.stop(); } catch { /* ignore */ }
+    try { await handle?.stop(); } catch { /* ignore */ }
     try { stdin.destroy(); } catch { /* ignore */ }
     rmSync(dir, { recursive: true, force: true });
   }
@@ -213,6 +221,7 @@ test('tools/list manifests conform to the MCP 2024-11-05 wire format', async () 
       input: stdin,
       output: stdout,
       pidfile: join(dir, 'pid'),
+      observer: false,
     });
     writeRequest(stdin, 7, 'tools/list');
     await settle();
@@ -262,7 +271,7 @@ test('tools/list manifests conform to the MCP 2024-11-05 wire format', async () 
       );
     }
   } finally {
-    try { handle?.stop(); } catch { /* ignore */ }
+    try { await handle?.stop(); } catch { /* ignore */ }
     try { stdin.destroy(); } catch { /* ignore */ }
     rmSync(dir, { recursive: true, force: true });
   }
@@ -281,6 +290,7 @@ test('tools/call against a registered tool returns its structured result', async
       input: stdin,
       output: stdout,
       pidfile: join(dir, 'pid'),
+      observer: false,
     });
     writeRequest(stdin, 3, 'tools/call', { name: 'list_memories', arguments: {} });
     await settle();
@@ -291,7 +301,7 @@ test('tools/call against a registered tool returns its structured result', async
     assert.equal(parsed.ok, true);
     assert.ok(Array.isArray(parsed.memories));
   } finally {
-    try { handle?.stop(); } catch { /* ignore */ }
+    try { await handle?.stop(); } catch { /* ignore */ }
     try { stdin.destroy(); } catch { /* ignore */ }
     rmSync(dir, { recursive: true, force: true });
   }
@@ -310,6 +320,7 @@ test('tools/call against an unregistered tool returns kind=unknown_tool with a h
       input: stdin,
       output: stdout,
       pidfile: join(dir, 'pid'),
+      observer: false,
     });
     writeRequest(stdin, 4, 'tools/call', {
       name: 'not_a_real_tool',
@@ -324,7 +335,7 @@ test('tools/call against an unregistered tool returns kind=unknown_tool with a h
     assert.equal(parsed.kind, 'unknown_tool');
     assert.ok(typeof parsed.hint === 'string' && parsed.hint.length > 0);
   } finally {
-    try { handle?.stop(); } catch { /* ignore */ }
+    try { await handle?.stop(); } catch { /* ignore */ }
     try { stdin.destroy(); } catch { /* ignore */ }
     rmSync(dir, { recursive: true, force: true });
   }
@@ -343,6 +354,7 @@ test('a method-not-found call returns JSON-RPC error -32601', async () => {
       input: stdin,
       output: stdout,
       pidfile: join(dir, 'pid'),
+      observer: false,
     });
     writeRequest(stdin, 5, 'mcp/no/such/method', {});
     await settle();
@@ -350,7 +362,7 @@ test('a method-not-found call returns JSON-RPC error -32601', async () => {
     assert.ok(response, 'should respond');
     assert.equal(response.error.code, -32601);
   } finally {
-    try { handle?.stop(); } catch { /* ignore */ }
+    try { await handle?.stop(); } catch { /* ignore */ }
     try { stdin.destroy(); } catch { /* ignore */ }
     rmSync(dir, { recursive: true, force: true });
   }
@@ -369,13 +381,14 @@ test('a notifications/* method is acknowledged without producing a response', as
       input: stdin,
       output: stdout,
       pidfile: join(dir, 'pid'),
+      observer: false,
     });
     writeRequest(stdin, undefined, 'notifications/initialized', {});
     await settle();
     const lines = parseLines(stdout.getBuffered());
     assert.equal(lines.length, 0, 'notifications should not produce responses');
   } finally {
-    try { handle?.stop(); } catch { /* ignore */ }
+    try { await handle?.stop(); } catch { /* ignore */ }
     try { stdin.destroy(); } catch { /* ignore */ }
     rmSync(dir, { recursive: true, force: true });
   }
@@ -394,6 +407,7 @@ test('a malformed JSON line produces a JSON-RPC parse error', async () => {
       input: stdin,
       output: stdout,
       pidfile: join(dir, 'pid'),
+      observer: false,
     });
     stdin.push('this is not json\n');
     await settle();
@@ -401,7 +415,7 @@ test('a malformed JSON line produces a JSON-RPC parse error', async () => {
     const errorResponse = lines.find((m) => m.error && m.error.code === -32700);
     assert.ok(errorResponse, 'should produce a parse error');
   } finally {
-    try { handle?.stop(); } catch { /* ignore */ }
+    try { await handle?.stop(); } catch { /* ignore */ }
     try { stdin.destroy(); } catch { /* ignore */ }
     rmSync(dir, { recursive: true, force: true });
   }
@@ -437,6 +451,7 @@ test('shutting down a previous instance: PID-based single-instance lifecycle', a
       input: stdin,
       output: stdout,
       pidfile,
+      observer: false,
     });
 
     // Give the SIGTERM up to 1.5s to land.
@@ -450,7 +465,7 @@ test('shutting down a previous instance: PID-based single-instance lifecycle', a
     const recorded = Number.parseInt(readFileSync(pidfile, 'utf8').trim(), 10);
     assert.equal(recorded, handle.pid, 'pidfile should now point at the new server');
   } finally {
-    try { handle?.stop(); } catch { /* ignore */ }
+    try { await handle?.stop(); } catch { /* ignore */ }
     try { stdin.destroy(); } catch { /* ignore */ }
     if (isProcessAlive(sleeper.pid)) {
       try { process.kill(sleeper.pid, 'SIGKILL'); } catch { /* ignore */ }
@@ -465,10 +480,18 @@ test('real subprocess: startMcpServer over stdio, initialize + ping, pidfile cle
   // responses come back as proper JSON-RPC 2.0 messages, confirms the
   // subprocess wrote its own pidfile, and then sends SIGTERM and
   // verifies the pidfile is removed.
+  //
+  // The subprocess boots the embedded observer on MA_OBSERVER_PORT=0
+  // (ephemeral) so the test stays hermetic. The observer is exercised
+  // separately in test/observer.test.js.
   const dir = makeTempDir('mineagent-mcp-subproc-');
   const pidfile = join(dir, 'pid');
   const child = spawn(process.execPath, [serverPath], {
-    env: { ...process.env, MINEAGENT_MCP_PIDFILE: pidfile },
+    env: {
+      ...process.env,
+      MINEAGENT_MCP_PIDFILE: pidfile,
+      MA_OBSERVER_PORT: '0',
+    },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   let stdoutBuf = '';
@@ -529,8 +552,10 @@ test('real subprocess: startMcpServer over stdio, initialize + ping, pidfile cle
     // spans multiple lines and includes a "(Use `node --trace-
     // deprecation ...` to show where the warning was created)"
     // hint). The server itself should not have written anything to
-    // stderr on a clean boot, so filter out anything that smells
-    // like a deprecation notice and assert on the remainder.
+    // stderr on a clean boot (the observer logs to the configured
+    // logger or stderr, with the `[observer]` prefix), so filter out
+    // anything that smells like a deprecation notice or an
+    // observer-bind message and assert on the remainder.
     const stripped = stderrBuf
       .split('\n')
       .filter((line) => !/DeprecationWarning/i.test(line))

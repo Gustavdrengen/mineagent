@@ -78,6 +78,27 @@ The server enforces "one instance at a time" on startup:
 
 This makes the start script (`workspace/start-mcp.sh`) idempotent: running it twice in a row is safe; the first instance is shut down before the second starts.
 
+### Embedded browser observer
+
+The MCP server **embeds the browser observer** in the same process. The agent's process owns the bot state and the event bus; the observer is a window into it. Running the observer as a separate process would always show "disconnected" because in-process state is not shared across processes.
+
+The observer is started by `startMcpServer()` after the pidfile is written, gated by:
+
+- The `observer` option on `startMcpServer({ observer })`:
+  - `observer: false` — skip starting it (tests, headless mode).
+  - `observer: { port, host }` — override defaults.
+  - `observer: true` (default) — start with env-var / default config.
+- The `MA_OBSERVER_PORT` env var:
+  - `MA_OBSERVER_PORT=0` — disable the observer.
+  - `MA_OBSERVER_PORT=<number>` — bind to that port (default 3000).
+- The `MA_OBSERVER_HOST` env var (default `127.0.0.1`):
+  - `MA_OBSERVER_HOST=0.0.0.0` — listen on all interfaces (LAN access).
+  - `127.0.0.1` (default) — localhost only.
+
+The observer's startup is best-effort: a port conflict is logged as a warning (`[observer] failed to start: ...`) and `startMcpServer` still returns with `handle.observer === null`. The MCP server is the load-bearing piece; the observer is a convenience for the developer.
+
+`stop()` is async and awaits the observer's teardown before removing the pidfile.
+
 ### Stale pidfiles
 
 The pidfile is removed on every graceful signal. A `kill -9` on the server (or any other untrapped kill) will leave a stale pidfile behind; the next start detects this via `isAlive()` (which signals 0 to the recorded PID), treats the previous owner as gone, overwrites the pidfile with its own PID, and proceeds. There is no lock daemon — the pidfile is a hint, not a guarantee, and the next-start-overwrite behavior is intentional.

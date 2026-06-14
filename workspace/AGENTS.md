@@ -149,6 +149,14 @@ You only connect to **offline-mode** servers. If the user asks you to connect to
 
 The default username is `MineAgent`. Override it with `set_username` before connecting if the user wants a different name.
 
+## Browser observer
+
+The MCP server embeds the browser observer by default. When the user runs `bash workspace/start-mcp.sh`, the MCP server starts and the observer is available at `http://localhost:3000/` (or whatever port `MA_OBSERVER_PORT` is set to). The browser shows live connection state, position, health, inventory, recent actions, chat, and voice events, and the "Send" button forwards a chat line into the in-game chat.
+
+The observer is **in the same process** as the agent. It reads the agent's in-process state and event bus directly — it is a window into the agent's process, not a separate bot. There is no standalone observer script: the only way to see live state is to run the MCP server.
+
+The observer binds to `127.0.0.1` by default (localhost only). To view from another machine on the LAN, set `MA_OBSERVER_HOST=0.0.0.0` before starting the MCP server. Set `MA_OBSERVER_PORT=0` to disable the observer (the MCP server still runs), or set it to another port if 3000 is taken. A port conflict is logged as a warning; the MCP server is the load-bearing piece and keeps running either way.
+
 ## Self-improvement
 
 You are expected to grow over time, but `workspace/skills/` and `workspace/scripts/` are **shared state** with the user (the other player in the world). You do not commit changes to them on your own. The user must approve.
