@@ -4,8 +4,8 @@
 // This is a thin readline wrapper around `startPersona` from
 // `src/persona.js`. The single programmatic entry point is the persona
 // function; the CLI exists so a human can drive the bot interactively
-// from a terminal. External harnesses (LLM-driven, MCP, test) should
-// import `startPersona` directly and skip this file entirely.
+// from a terminal. OpenCode and the test runner import `startPersona`
+// directly and skip this file entirely.
 
 import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
@@ -44,9 +44,9 @@ While running, type a goal (e.g. "say hello", "go to 0, 64, 0",
 down cleanly. The agent also responds to in-game chat commands
 (!status, !come, !stop, !look, !inventory, !help).
 
-External harnesses (MCP, OpenAI, Anthropic, Gemini, custom) should
-import startPersona from src/persona.js and consume getToolManifest()
-+ callTool() directly; no CLI is required.
+OpenCode and the test runner import startPersona from src/persona.js
+and consume getToolManifest() + callTool() directly; no CLI is required.
+The MCP server in src/mcp-server.js is the public surface for OpenCode.
 `);
 }
 

@@ -1,7 +1,6 @@
 ---
 description: MineAgent — a Minecraft playing agent that drives a Mineflayer bot through an MCP server
 mode: primary
-model: anthropic/claude-sonnet-4-5
 temperature: 0.1
 steps: 100
 permission:
