@@ -51,17 +51,33 @@ function distance(a, b) {
   return Math.sqrt(dx * dx + dy * dy + dz * dz);
 }
 
+function subscribeTo(emitter, event, fn, once = false) {
+  if (!emitter || typeof emitter.on !== 'function') return () => {};
+  if (once) emitter.once(event, fn);
+  else emitter.on(event, fn);
+  return () => {
+    if (typeof emitter.off === 'function') emitter.off(event, fn);
+    else if (typeof emitter.removeListener === 'function')
+      emitter.removeListener(event, fn);
+  };
+}
+
 // Inspect the block at a position and decide whether the bot can stand
 // on it. Returns `true` for air, unknown chunks, and any block that is
 // not solid in the obvious sense. The check is deliberately a small
 // surface area (blockAt + type != 0) because the cost is paid on every
 // move, and the goal-selection fork in `moveToCoordinates` is the
-// only consumer.
+// only consumer. We prefer `bot.Vec3` when available because the real
+// Mineflayer `blockAt` is strict about Vec3-shaped input; passing a
+// plain object would silently throw on a real bot and trigger the
+// GoalBlock branch — which is the bug this helper exists to prevent.
 function isDestinationSolid(bot, x, y, z) {
   if (typeof bot.blockAt !== 'function') return false;
+  const Vec3Ctor = bot.Vec3;
+  const probe = typeof Vec3Ctor === 'function' ? new Vec3Ctor(x, y, z) : { x, y, z };
   let block;
   try {
-    block = bot.blockAt({ x, y, z });
+    block = bot.blockAt(probe);
   } catch {
     return false;
   }
@@ -181,7 +197,10 @@ export async function moveToCoordinates({
     // Hard cap. Without this, a bot that gets stuck against an
     // obstacle (pathfinder keeps trying, no error event) would block
     // the persona loop forever. 0 means "no timeout" — the persona
-    // can opt out for long-distance moves if it wants to.
+    // can opt out for long-distance moves if it wants to. We unref
+    // the timer so a pending move does not keep the test process
+    // alive past its natural end; in production the Mineflayer
+    // socket is the loop's real anchor.
     if (timeoutMs > 0) {
       timer = setTimeout(() => {
         finish({
@@ -197,17 +216,6 @@ export async function moveToCoordinates({
       finish({ ok: false, error: err.message, kind: 'path_error' });
     }
   });
-}
-
-function subscribeTo(emitter, event, fn, once = false) {
-  if (!emitter || typeof emitter.on !== 'function') return () => {};
-  if (once) emitter.once(event, fn);
-  else emitter.on(event, fn);
-  return () => {
-    if (typeof emitter.off === 'function') emitter.off(event, fn);
-    else if (typeof emitter.removeListener === 'function')
-      emitter.removeListener(event, fn);
-  };
 }
 
 export async function followPlayer({ username, durationMs = 30000 } = {}) {

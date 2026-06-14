@@ -182,9 +182,12 @@ test('mineBlock skips an out-of-reach candidate and digs the next one', async ()
   assert.equal(findCalls.length, 2);
   assert.equal(digCalls.length, 1);
   assert.equal(digCalls[0], nearBlock);
-  // The bot looked at the target before swinging.
-  assert.equal(lookCalls.length, 1);
-  assert.deepEqual(lookCalls[0], nearBlock.position);
+  // The bot now uses Mineflayer's atomic look+dig (`bot.dig(target,
+  // true)`), so the tool no longer issues a separate `lookAt` call.
+  // The dig itself does the aiming. The legacy `lookAt` hook is
+  // captured here only to assert it is NOT called — the persona
+  // does not need to (and should not) pre-aim.
+  assert.equal(lookCalls.length, 0);
 });
 
 test('mineBlock returns out_of_reach with the nearest position when nothing is reachable', async () => {

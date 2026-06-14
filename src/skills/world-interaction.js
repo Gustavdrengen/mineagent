@@ -163,15 +163,14 @@ export async function mineBlock({ name, count = 1, range = 4 } = {}) {
       continue;
     }
     try {
-      // Force the bot to look at the target before swinging. Without
-      // this, the dig animation can play against whatever block the
-      // bot happens to be facing, and the actual target never breaks.
-      // The persona has no way to know it should look first — the tool
+      // Use Mineflayer's atomic look+dig (forceLook: true). The
+      // single-call form looks at the block center and immediately
+      // starts the dig animation in one server round trip; splitting
+      // them (lookAt then dig) opens a window where the world state
+      // can change and exposes a corner-vs-center aiming bug. The
+      // persona has no way to know it should look first — the tool
       // has to.
-      if (typeof bot.lookAt === 'function') {
-        await bot.lookAt(current.position, true);
-      }
-      await bot.dig(current);
+      await bot.dig(current, true);
       mined++;
     } catch (err) {
       setCurrentTask('idle');
@@ -203,7 +202,17 @@ export async function mineBlock({ name, count = 1, range = 4 } = {}) {
       nearest: { name, position },
     };
   }
-  return { ok: true, action: 'mine', blocksTouched: mined };
+  // `partial: true` lets the persona tell "we got everything" apart
+  // from "we got what we could, but the search area was exhausted
+  // before we hit the requested count". The persona should call
+  // again (or move closer) in the partial case.
+  return {
+    ok: true,
+    action: 'mine',
+    blocksTouched: mined,
+    requested: count,
+    partial: mined < count,
+  };
 }
 
 export async function placeBlock({ name, position, faceVector } = {}) {
