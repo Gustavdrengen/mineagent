@@ -117,6 +117,187 @@ test('mineBlock rejects unknown block name', async () => {
   assert.match(r.error, /unknown block/);
 });
 
+// --- new behavior: reachability, diggability, look-before-swing --------
+
+test('mineBlock tags validation errors with stable kinds', async () => {
+  resetRuntime();
+  setStatus(STATUS.CONNECTED);
+  state.bot = connectedBot();
+  const r1 = await mineBlock({ name: '', count: 1 });
+  assert.equal(r1.kind, 'name_required');
+  const r2 = await mineBlock({ name: 'dirt', count: 0 });
+  assert.equal(r2.kind, 'count_invalid');
+});
+
+test('mineBlock tags not_connected and no_position', async () => {
+  resetRuntime();
+  state.bot = null;
+  const r1 = await mineBlock({ name: 'dirt', count: 1 });
+  assert.equal(r1.kind, 'not_connected');
+  resetRuntime();
+  setStatus(STATUS.CONNECTED);
+  // Registry must include 'dirt' so the new code reaches the
+  // no_position check (which sits after the unknown_block check).
+  state.bot = connectedBot({
+    entity: null,
+    registry: { blocksByName: { dirt: { id: 3 } } },
+  });
+  const r2 = await mineBlock({ name: 'dirt', count: 1 });
+  assert.equal(r2.kind, 'no_position');
+});
+
+test('mineBlock skips an out-of-reach candidate and digs the next one', async () => {
+  resetRuntime();
+  setStatus(STATUS.CONNECTED);
+  // Two oak_log blocks. The first is 10 blocks away (out of reach);
+  // the second is 2 blocks away (within reach). The tool should
+  // skip the first and dig the second.
+  const farBlock = { type: 17, position: { x: 10, y: 64, z: 0 } };
+  const nearBlock = { type: 17, position: { x: 2, y: 64, z: 0 } };
+  const findCalls = [];
+  const digCalls = [];
+  const lookCalls = [];
+  state.bot = connectedBot({
+    registry: { blocksByName: { oak_log: { id: 17 } } },
+    blockAt: (pos) => {
+      // Both positions resolve to the matching block type.
+      if (pos.x === 10) return farBlock;
+      if (pos.x === 2) return nearBlock;
+      return null;
+    },
+    findBlock: () => {
+      // Return the far one first, the near one second.
+      const next = findCalls.length === 0 ? farBlock : nearBlock;
+      findCalls.push(next);
+      return next;
+    },
+    dig: async (block) => { digCalls.push(block); },
+    lookAt: async (pos) => { lookCalls.push(pos); },
+  });
+  const r = await mineBlock({ name: 'oak_log', count: 1 });
+  assert.equal(r.ok, true);
+  assert.equal(r.blocksTouched, 1);
+  // The tool tried twice: once for the out-of-reach one, once for
+  // the reachable one. Only the second dig actually fired.
+  assert.equal(findCalls.length, 2);
+  assert.equal(digCalls.length, 1);
+  assert.equal(digCalls[0], nearBlock);
+  // The bot looked at the target before swinging.
+  assert.equal(lookCalls.length, 1);
+  assert.deepEqual(lookCalls[0], nearBlock.position);
+});
+
+test('mineBlock returns out_of_reach with the nearest position when nothing is reachable', async () => {
+  resetRuntime();
+  setStatus(STATUS.CONNECTED);
+  const farBlock = { type: 17, position: { x: 20, y: 64, z: 0 } };
+  state.bot = connectedBot({
+    registry: { blocksByName: { oak_log: { id: 17 } } },
+    blockAt: () => farBlock,
+    findBlock: () => farBlock,
+    dig: async () => { throw new Error('should not have been called'); },
+  });
+  const r = await mineBlock({ name: 'oak_log', count: 1 });
+  assert.equal(r.ok, false);
+  assert.equal(r.kind, 'out_of_reach');
+  assert.deepEqual(r.position, { x: 20, y: 64, z: 0 });
+  assert.equal(r.nearest.name, 'oak_log');
+  assert.match(r.error, /out of reach/);
+});
+
+test('mineBlock skips undiggable candidates (canDigBlock returns false)', async () => {
+  resetRuntime();
+  setStatus(STATUS.CONNECTED);
+  // First call returns an undiggable block (bedrock-like), second
+  // call returns a diggable one.
+  const bedrock = { type: 17, position: { x: 1, y: 64, z: 0 } };
+  const dirt = { type: 3, position: { x: 2, y: 64, z: 0 } };
+  let callIndex = 0;
+  const findBlock = () => (callIndex++ === 0 ? bedrock : dirt);
+  state.bot = connectedBot({
+    registry: { blocksByName: { oak_log: { id: 17 }, dirt: { id: 3 } } },
+    blockAt: (pos) => (pos.x === 1 ? bedrock : dirt),
+    findBlock,
+    canDigBlock: (block) => block.type === 3,
+    dig: async () => {},
+  });
+  const r = await mineBlock({ name: 'dirt', count: 1 });
+  assert.equal(r.ok, true);
+  assert.equal(r.blocksTouched, 1);
+});
+
+test('mineBlock returns not_diggable when canDigBlock is false for every candidate', async () => {
+  resetRuntime();
+  setStatus(STATUS.CONNECTED);
+  const bedrock = { type: 7, position: { x: 1, y: 64, z: 0 } };
+  state.bot = connectedBot({
+    registry: { blocksByName: { bedrock: { id: 7 } } },
+    blockAt: () => bedrock,
+    findBlock: () => bedrock,
+    canDigBlock: () => false,
+    dig: async () => { throw new Error('should not have been called'); },
+  });
+  const r = await mineBlock({ name: 'bedrock', count: 1 });
+  assert.equal(r.ok, false);
+  assert.equal(r.kind, 'not_diggable');
+  assert.deepEqual(r.position, { x: 1, y: 64, z: 0 });
+});
+
+test('mineBlock re-resolves the block via blockAt before digging (handles world changes)', async () => {
+  resetRuntime();
+  setStatus(STATUS.CONNECTED);
+  const target = { type: 17, position: { x: 1, y: 64, z: 0 } };
+  // First findBlock returns the target. blockAt returns null
+  // (the block is gone — say another player broke it). The tool
+  // should not dig; it should retry. Second findBlock returns
+  // another reachable block, which digs cleanly.
+  const target2 = { type: 17, position: { x: 2, y: 64, z: 0 } };
+  const digCalls = [];
+  let callIndex = 0;
+  state.bot = connectedBot({
+    registry: { blocksByName: { oak_log: { id: 17 } } },
+    blockAt: (pos) => (pos.x === 1 ? null : target2),
+    findBlock: () => (callIndex++ === 0 ? target : target2),
+    dig: async (block) => { digCalls.push(block); },
+  });
+  const r = await mineBlock({ name: 'oak_log', count: 1 });
+  assert.equal(r.ok, true);
+  assert.equal(r.blocksTouched, 1);
+  // Only the second block was dug; the first was skipped because
+  // blockAt returned null.
+  assert.equal(digCalls.length, 1);
+  assert.equal(digCalls[0], target2);
+});
+
+test('mineBlock dig_failed surfaces the Mineflayer error', async () => {
+  resetRuntime();
+  setStatus(STATUS.CONNECTED);
+  const target = { type: 17, position: { x: 1, y: 64, z: 0 } };
+  state.bot = connectedBot({
+    registry: { blocksByName: { oak_log: { id: 17 } } },
+    blockAt: () => target,
+    findBlock: () => target,
+    dig: async () => { throw new Error('Player position is too far from block to dig'); },
+  });
+  const r = await mineBlock({ name: 'oak_log', count: 1 });
+  assert.equal(r.ok, false);
+  assert.equal(r.kind, 'dig_failed');
+  assert.match(r.error, /too far/);
+  assert.equal(r.blocksTouched, 0);
+});
+
+test('mineBlock no_block_in_range when findBlock returns null and no blocks were mined', async () => {
+  resetRuntime();
+  setStatus(STATUS.CONNECTED);
+  state.bot = connectedBot({
+    registry: { blocksByName: { oak_log: { id: 17 } } },
+    findBlock: () => null,
+  });
+  const r = await mineBlock({ name: 'oak_log', count: 1 });
+  assert.equal(r.ok, false);
+  assert.equal(r.kind, 'no_block_in_range');
+});
+
 test('placeBlock rejects when not connected', async () => {
   resetRuntime();
   state.bot = null;

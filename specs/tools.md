@@ -48,12 +48,12 @@ The `execute` function is the runtime entry point. The **manifest** is the proje
 | `ask_user_for_server` | Get a prompt to ask the user for an IP/port. |
 | `connect_to_last_known_server` | Re-connect to the server in `memories/last-server.json`. |
 | `forget_last_server` | Clear the remembered server. |
-| `move_to` | Walk the bot to a destination via pathfinding. |
+| `move_to` | Walk the bot to a destination via pathfinding. If the destination is inside a solid block, the bot stops adjacent within `tolerance` blocks (default 1). Times out after `timeoutMs` (default 30000; pass 0 to disable). |
 | `stop_moving` | Stop the current movement and any active follow loop. |
 | `follow_player` | Follow a player by name for up to `durationMs` (default 30s). |
 | `look_at_block` | Look at the block at a coordinate. |
 | `look_at_position` | Look at an arbitrary point in the world. |
-| `mine_block` | Mine a block by name. Searches within `range` blocks (default 4). |
+| `mine_block` | Mine a block by name. Searches within `range` blocks (default 4), skips out-of-reach and undiggable candidates, and looks at the target before swinging. |
 | `place_block` | Place a block from the bot's inventory at a coordinate. |
 | `find_block` | Find the nearest block of a given name within `maxDistance` blocks. |
 | `read_chat_history` | Read the last `limit` chat messages (default 20, max 100). |
@@ -146,13 +146,23 @@ Stable, defined in `src/connection.js` (`ERROR_KIND`) and the tool-level helpers
 | `not_connected` | `send_chat` and any in-world tool | The bot is offline. The tool did not attempt the action. |
 | `message_required` | `send_chat` | The `text` argument was missing, not a string, or empty/whitespace. |
 | `item_missing` | `equip_item`, `drop_item` | The named item is not in the bot's inventory. |
-| `name_required` | `equip_item`, `drop_item`, `find_block` | The `name` argument was missing or empty. |
-| `count_invalid` | `drop_item` | `count` was not a positive number. |
+| `name_required` | `equip_item`, `drop_item`, `find_block`, `mine_block` | The `name` argument was missing or empty. |
+| `count_invalid` | `drop_item`, `mine_block` | `count` was not a positive number. |
 | `equip_failed` / `drop_failed` / `use_failed` / `look_failed` / `attack_failed` / `block_lookup_failed` | respective tools | The Mineflayer call threw; the `error` field carries Mineflayer's message. |
 | `target_required` / `target_missing` | `attack_entity` | `attack_entity` needs `username` or `entityId`; the named target was not found in the bot's entities/players. |
-| `no_position` | `scan_nearby_entities`, `attack_entity` | The bot has a live connection but no `entity.position` yet (mid-spawn or world not loaded). |
-| `coords_invalid` | `get_block_info`, `look_at_position` | One of `x`, `y`, `z` is not a finite number. |
-| `unknown_block` | `find_block` | The named block is not in Mineflayer's block registry. |
+| `no_path` | `move_to` | The pathfinder could not compute any route to the destination. |
+| `destination_blocked` | `move_to` | The pathfinder found a partial path that does not reach the goal (e.g. the destination is surrounded by walls, or the chunk failed to load). The bot stopped as close as it could get. |
+| `timeout` | `move_to` | The bot did not reach the destination within `timeoutMs`. Typical when the destination is unreachable or the path is long. |
+| `timeout_invalid` | `move_to` | `timeoutMs` was not a non-negative number. |
+| `no_pathfinder` | `move_to` | The pathfinder plugin failed to load. |
+| `path_error` | `move_to` | `pathfinder.setGoal` threw. The `error` field carries Mineflayer's message. |
+| `out_of_reach` | `mine_block` | No candidate in `range` was within the bot's 4.5-block mining reach. The response includes `position` of the nearest candidate. |
+| `not_diggable` | `mine_block` | The only candidate in `range` cannot be broken (bedrock, water, etc.). The response includes `position`. |
+| `no_block_in_range` | `mine_block` | There is no block of the requested name in `range` at all. |
+| `dig_failed` | `mine_block` | Mineflayer's `dig` threw. The `error` field carries Mineflayer's message. |
+| `no_position` | `mine_block`, `scan_nearby_entities`, `attack_entity` | The bot has a live connection but no `entity.position` yet (mid-spawn or world not loaded). |
+| `coords_invalid` | `get_block_info`, `look_at_position`, `move_to` | One of `x`, `y`, `z` is not a finite number. |
+| `unknown_block` | `find_block`, `mine_block` | The named block is not in Mineflayer's block registry. |
 | `unknown_tool` | `callTool` | The name passed to `callTool` is not registered. The `hint` field lists available tools. |
 | `execution_error` | `callTool` | The tool's `execute` threw an exception (genuine bug, not a user-facing failure). |
 

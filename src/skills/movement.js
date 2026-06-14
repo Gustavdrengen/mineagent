@@ -13,6 +13,17 @@ import { emit } from '../events.js';
 
 const { goals, Movements } = pathfinder;
 const STOP_DISTANCE = 1; // blocks
+// Default cap on a single move. Without a timeout, a stuck-but-not-
+// noPath destination would block the persona loop forever. 30s is
+// long enough for normal cross-biome walks and short enough that an
+// unreachable goal returns control to the persona within one chat
+// exchange.
+const DEFAULT_MOVE_TIMEOUT_MS = 30000;
+// Block id 0 is air. Anything else is treated as "solid for the
+// purposes of standing on it" — true solids like logs and stone
+// obviously, but also slabs, fences, etc. The point is to detect
+// "the destination is occupied", not to do a full collision query.
+const AIR_BLOCK_ID = 0;
 
 // Module-level handle for the active follow interval so stopMoving()
 // can actually cancel a follow (previously the tick would re-issue
@@ -40,27 +51,79 @@ function distance(a, b) {
   return Math.sqrt(dx * dx + dy * dy + dz * dz);
 }
 
-export async function moveToCoordinates({ x, y, z, tolerance = STOP_DISTANCE } = {}) {
+// Inspect the block at a position and decide whether the bot can stand
+// on it. Returns `true` for air, unknown chunks, and any block that is
+// not solid in the obvious sense. The check is deliberately a small
+// surface area (blockAt + type != 0) because the cost is paid on every
+// move, and the goal-selection fork in `moveToCoordinates` is the
+// only consumer.
+function isDestinationSolid(bot, x, y, z) {
+  if (typeof bot.blockAt !== 'function') return false;
+  let block;
+  try {
+    block = bot.blockAt({ x, y, z });
+  } catch {
+    return false;
+  }
+  if (!block) return false;
+  return block.type !== AIR_BLOCK_ID;
+}
+
+export async function moveToCoordinates({
+  x,
+  y,
+  z,
+  tolerance = STOP_DISTANCE,
+  timeoutMs = DEFAULT_MOVE_TIMEOUT_MS,
+} = {}) {
   const bot = getBot();
   if (!bot || state.status !== 'connected') {
-    return { ok: false, error: 'not connected' };
+    return { ok: false, error: 'not connected', kind: 'not_connected' };
   }
   for (const v of [x, y, z]) {
     if (typeof v !== 'number' || !Number.isFinite(v)) {
-      return { ok: false, error: 'x, y, z must be finite numbers' };
+      return { ok: false, error: 'x, y, z must be finite numbers', kind: 'coords_invalid' };
     }
   }
+  if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs < 0) {
+    return { ok: false, error: 'timeoutMs must be a non-negative number', kind: 'timeout_invalid' };
+  }
   const pf = ensurePathfinder(bot);
-  if (!pf) return { ok: false, error: 'pathfinder unavailable' };
+  if (!pf) return { ok: false, error: 'pathfinder unavailable', kind: 'no_pathfinder' };
   setCurrentTask(`move to ${x}, ${y}, ${z}`);
   recordAction('move', `to ${x}, ${y}, ${z}`);
   emit('state', null);
-  const goal = new goals.GoalBlock(Math.floor(x), Math.floor(y), Math.floor(z));
+  const goalX = Math.floor(x);
+  const goalY = Math.floor(y);
+  const goalZ = Math.floor(z);
+  // Pick the goal type based on what's at the destination. If the
+  // destination is occupied by a solid block (a tree, a wall, a placed
+  // block), a strict GoalBlock would either fail to find a path or
+  // find a partial path that puts the bot up against the block with
+  // no way to call it done. GoalNear lets the pathfinder settle as
+  // soon as the bot is within `tolerance` blocks of the destination,
+  // which is the right behavior for the common "go to this tree" /
+  // "go to this ore" case. Air destinations keep the exact GoalBlock
+  // so callers that rely on the bot being at a specific coordinate
+  // (e.g. placing a block at an exact spot) still get exact
+  // positioning.
+  const destinationIsSolid = isDestinationSolid(bot, goalX, goalY, goalZ);
+  const goal = destinationIsSolid
+    ? new goals.GoalNear(goalX, goalY, goalZ, tolerance)
+    : new goals.GoalBlock(goalX, goalY, goalZ);
   return new Promise((resolve) => {
     let settled = false;
+    let timer = null;
+    const clearTimer = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    };
     const finish = (result) => {
       if (settled) return;
       settled = true;
+      clearTimer();
       try { bot.pathfinder.setGoal(null); } catch { /* ignore */ }
       offEnd();
       offKicked();
@@ -72,10 +135,10 @@ export async function moveToCoordinates({ x, y, z, tolerance = STOP_DISTANCE } =
     // never fire and this promise would hang forever. Subscribe to the
     // Mineflayer end/kicked events and resolve the movement.
     const offEnd = subscribeTo(bot, 'end', () =>
-      finish({ ok: false, error: 'disconnected mid-path' })
+      finish({ ok: false, error: 'disconnected mid-path', kind: 'not_connected' })
     );
     const offKicked = subscribeTo(bot, 'kicked', (reason) =>
-      finish({ ok: false, error: `kicked mid-path: ${reason || 'unknown'}` })
+      finish({ ok: false, error: `kicked mid-path: ${reason || 'unknown'}`, kind: 'kicked' })
     );
     subscribeTo(bot.pathfinder, 'goal_reached', () => {
       const arrived = bot.entity?.position
@@ -88,8 +151,23 @@ export async function moveToCoordinates({ x, y, z, tolerance = STOP_DISTANCE } =
       finish({ ok: true, arrivedAt: arrived, pathLength: arrived ? 1 : 0 });
     }, true);
     subscribeTo(bot.pathfinder, 'path_update', (result) => {
-      if (result && result.status === 'noPath') {
-        finish({ ok: false, error: 'no path found' });
+      if (!result) return;
+      if (result.status === 'noPath') {
+        finish({ ok: false, error: 'no path found', kind: 'no_path' });
+      } else if (result.status === 'partialPath') {
+        // A partial path means the pathfinder found *some* route but
+        // it does not reach the goal. Without handling this, the bot
+        // would walk as far as it can and then idle in place, never
+        // emitting goal_reached or noPath. The persona would never
+        // get a result back. This is the tree-in-the-way scenario:
+        // surface it as a structured error so the agent can decide
+        // (e.g. call move_to to an adjacent position, mine the
+        // obstacle, or ask the user for guidance).
+        finish({
+          ok: false,
+          error: 'partial path: destination is not reachable from here',
+          kind: 'destination_blocked',
+        });
       }
     }, true);
     subscribeTo(bot.pathfinder, 'goal_updated', () => {
@@ -100,10 +178,23 @@ export async function moveToCoordinates({ x, y, z, tolerance = STOP_DISTANCE } =
         finish({ ok: true, arrivedAt: { x, y, z }, pathLength: 0 });
       }
     }, true);
+    // Hard cap. Without this, a bot that gets stuck against an
+    // obstacle (pathfinder keeps trying, no error event) would block
+    // the persona loop forever. 0 means "no timeout" — the persona
+    // can opt out for long-distance moves if it wants to.
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        finish({
+          ok: false,
+          error: `did not reach destination within ${timeoutMs}ms`,
+          kind: 'timeout',
+        });
+      }, timeoutMs);
+    }
     try {
       bot.pathfinder.setGoal(goal);
     } catch (err) {
-      finish({ ok: false, error: err.message });
+      finish({ ok: false, error: err.message, kind: 'path_error' });
     }
   });
 }

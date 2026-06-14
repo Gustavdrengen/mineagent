@@ -215,14 +215,24 @@ export const tools = [
   // --- In-world action tools (T1) -----------------------------------------
   {
     name: 'move_to',
-    description: 'Walk the bot to a destination via pathfinding.',
+    description:
+      'Walk the bot to a destination via pathfinding. If the destination ' +
+      'is occupied by a solid block (a tree, a wall, an ore), the bot ' +
+      'stops adjacent to it within `tolerance` blocks (default 1) instead ' +
+      'of trying to walk into the obstacle. Times out after `timeoutMs` ' +
+      'milliseconds (default 30000; pass 0 to disable). Returns ' +
+      '{ ok: true, arrivedAt } on success, or { ok: false, kind } with one ' +
+      'of `no_path`, `destination_blocked` (pathfinder reached a partial ' +
+      'path and gave up, e.g. the destination is surrounded by walls), ' +
+      `timeout, not_connected, coords_invalid, timeout_invalid, no_pathfinder, path_error, kicked on failure. The persona should not call move_to on a coordinate that is inside a solid block expecting the bot to stand there — pick a coordinate on a walkable surface or an adjacent position.`,
     parameters: buildParameters({
       x: PARAM.number('Destination X coordinate.', { required: true }),
       y: PARAM.number('Destination Y coordinate.', { required: true }),
       z: PARAM.number('Destination Z coordinate.', { required: true }),
-      tolerance: PARAM.number('How close counts as "arrived" in blocks. Defaults to 1.'),
+      tolerance: PARAM.number('How close counts as "arrived" in blocks. Defaults to 1. Used as the GoalNear radius when the destination is a solid block.'),
+      timeoutMs: PARAM.number('Maximum time to wait for arrival in milliseconds. Default 30000. Pass 0 to disable the timeout.'),
     }),
-    execute: async ({ x, y, z, tolerance } = {}) => moveToCoordinates({ x, y, z, tolerance }),
+    execute: async ({ x, y, z, tolerance, timeoutMs } = {}) => moveToCoordinates({ x, y, z, tolerance, timeoutMs }),
   },
   {
     name: 'stop_moving',
@@ -261,11 +271,26 @@ export const tools = [
   },
   {
     name: 'mine_block',
-    description: 'Mine a block by name. Searches within range blocks (default 4).',
+    description:
+      'Mine a block by name. Searches within `range` blocks (default 4) ' +
+      'and only digs blocks the bot can actually reach (within 4.5 blocks ' +
+      'of its position) and can actually dig (not bedrock, etc.). ' +
+      'Out-of-reach and undiggable candidates are silently skipped — the ' +
+      'tool finds the next-nearest one rather than failing the whole ' +
+      'request. The bot looks at the target before swinging so the dig ' +
+      'animation lands on the right block. Returns ' +
+      '{ ok: true, blocksTouched } on success, or { ok: false, kind } with ' +
+      'one of `out_of_reach` (no candidate within reach; the response ' +
+      'includes the position of the nearest one so the persona can call ' +
+      'move_to first), `not_diggable` (no candidate can be broken; bedrock, ' +
+      'water, etc.), `no_block_in_range` (none in `range` at all), ' +
+      '`dig_failed` (Mineflayer error; `error` carries the message), ' +
+      '`not_connected`, `name_required`, `count_invalid`, `unknown_block`, ' +
+      '`no_position` on failure.',
     parameters: buildParameters({
       name: PARAM.string('Block name to mine (e.g. "oak_log", "dirt").', { required: true }),
       count: PARAM.number('How many blocks to mine. Default 1.'),
-      range: PARAM.number('Search radius in blocks. Default 4.'),
+      range: PARAM.number('Search radius in blocks. Default 4. The tool may use a smaller effective search if all blocks in `range` are out of reach.'),
     }),
     execute: async ({ name, count, range } = {}) => mineBlock({ name, count, range }),
   },
