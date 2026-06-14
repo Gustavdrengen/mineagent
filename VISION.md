@@ -251,6 +251,16 @@ The single in-world voice helper is `say()` in `src/skills/chat.js`. It validate
 
 The browser is the place where the voice is played.
 
+## Staying in the World
+
+MineAgent is an **in-world resident** between turns, not a turn-anchored assistant. Once the bot has joined a server and finished the work the player asked for, it does not return control to the OpenCode window. It stays in the Minecraft world and keeps listening for the next player message. The OpenCode window is the developer's, not the player's; the player joined a multiplayer world and is expecting the bot to be there.
+
+The persona's idle behavior is to wait for the next chat message, on a short, bounded heartbeat. When the agent has nothing else to do, it blocks on a wait-for-chat tool until a player speaks, or until a brief window has elapsed with no chat. The window is small enough to keep the agent live to the harness and large enough to feel "always listening" to a human. On a timeout — which is the expected outcome when no one is talking — the agent calls the wait tool again and keeps listening. Player silence is not a cue to finish; it is the normal idle state.
+
+The only conditions that end this idle loop are: the player in the game tells the agent to leave the server (a direct instruction or a built-in shutdown command), or the OpenCode developer (not the player) explicitly tells the agent to stop. The agent must not decide on its own that its turn is over. It must not summarize the work and wrap up. It must not "return to the user" on its own initiative.
+
+This is a product-level decision, not a harness quirk. MineAgent's whole reason to exist is to be a player in the world, not a chat-with-the-developer tool. The idle-tick tool and the persona system prompt that drives it are the load-bearing pieces of that contract.
+
 ## Browser Observer
 
 MineAgent should expose a browser-accessible server that shows what the agent is doing.

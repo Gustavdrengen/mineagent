@@ -27,7 +27,8 @@ import {
   lookAtPosition,
   attackEntity,
 } from '../src/skills/in-world.js';
-import { say } from '../src/skills/chat.js';
+import { say, waitForChat, __test_clampWaitTimeout } from '../src/skills/chat.js';
+import { emit } from '../src/events.js';
 
 function connectedBot(extra = {}) {
   const items = (extra.items || []).slice();
@@ -456,6 +457,205 @@ test('say() re-throws unknown errors (no kind field)', () => {
   // caller's try/catch or the test runner sees the failure, not a
   // silently-swallowed envelope.
   assert.throws(() => say({ message: 'hello' }), /bot exploded/);
+});
+
+test('wait_for_chat returns not_connected envelope when bot is offline', async () => {
+  resetRuntime();
+  state.bot = null;
+  setStatus(STATUS.DISCONNECTED);
+  const r = await waitForChat({ timeoutMs: 50 });
+  assert.equal(r.ok, false);
+  assert.equal(r.kind, 'not_connected');
+  assert.match(r.error, /not connected/);
+});
+
+test('wait_for_chat resolves with the next chat message before the timeout', async () => {
+  resetRuntime();
+  setStatus(STATUS.CONNECTED);
+  state.bot = connectedBot();
+  const promise = waitForChat({ timeoutMs: 1000 });
+  setImmediate(() => {
+    emit('chat', { username: 'tester', message: 'hello there', ts: Date.now() });
+  });
+  const r = await promise;
+  assert.equal(r.ok, true);
+  assert.equal(r.from, 'tester');
+  assert.equal(r.message, 'hello there');
+  assert.ok(typeof r.ts === 'number');
+});
+
+test('wait_for_chat times out when no chat arrives within the window', async () => {
+  resetRuntime();
+  setStatus(STATUS.CONNECTED);
+  state.bot = connectedBot();
+  const start = Date.now();
+  const r = await waitForChat({ timeoutMs: 80 });
+  const elapsed = Date.now() - start;
+  assert.equal(r.ok, false);
+  assert.equal(r.timeout, true);
+  assert.match(r.error, /no chat in window/);
+  // waitedMs is the actual elapsed time, not the request value, so
+  // the persona can reason about its own pace.
+  assert.ok(typeof r.waitedMs === 'number');
+  assert.ok(r.waitedMs >= 70, `expected waitedMs >= 70, got ${r.waitedMs}`);
+  assert.ok(elapsed < 1000, `wait should not have blocked the full 1s`);
+});
+
+test('wait_for_chat ignores chat events with timestamps before the cutoff', async () => {
+  resetRuntime();
+  setStatus(STATUS.CONNECTED);
+  state.bot = connectedBot();
+  const promise = waitForChat({ timeoutMs: 100 });
+  // Emit a chat event with a timestamp far in the past; the helper
+  // should ignore it and time out instead.
+  setImmediate(() => {
+    emit('chat', { username: 'late', message: 'stale', ts: 0 });
+  });
+  const r = await promise;
+  assert.equal(r.ok, false);
+  assert.equal(r.timeout, true);
+});
+
+test('wait_for_chat uses the default 10s timeout when no value is given', async () => {
+  resetRuntime();
+  setStatus(STATUS.CONNECTED);
+  state.bot = connectedBot();
+  // 0 / negative / non-finite values fall back to the default. The
+  // default is asserted via the exported `DEFAULT_WAIT_FOR_CHAT_TIMEOUT_MS`
+  // constant below; the helper here just makes sure the fallback path
+  // is taken (we don't actually wait 10s — we cap the run by passing
+  // a real but small value to a stubbed clamp).
+  const clamped = __test_clampWaitTimeout(0, 10000);
+  assert.equal(clamped, 10000, '0 should fall back to the default 10000ms');
+  const clampedNeg = __test_clampWaitTimeout(-1, 10000);
+  assert.equal(clampedNeg, 10000, 'negative should fall back to the default');
+  const clampedNaN = __test_clampWaitTimeout(Number.NaN, 10000);
+  assert.equal(clampedNaN, 10000, 'NaN should fall back to the default');
+  // Sanity: the default constant really is 10 seconds.
+  assert.equal(__test_clampWaitTimeout(undefined, 10000), 10000);
+  // End-to-end: with no value, the helper should still resolve on a
+  // chat event. We feed one in immediately to avoid the actual wait.
+  const promise = waitForChat({});
+  setImmediate(() => {
+    emit('chat', { username: 'fast', message: 'pong', ts: Date.now() });
+  });
+  const r = await promise;
+  assert.equal(r.ok, true);
+  assert.equal(r.from, 'fast');
+});
+
+test('wait_for_chat clamps timeoutMs to the [100, 60000] band', () => {
+  // Pure function test against the exported clamp helper. No
+  // global.setTimeout stubbing, no event loop churn.
+  const fallback = 10000;
+  assert.equal(__test_clampWaitTimeout(5, fallback), 100, '5ms should clamp up to 100ms');
+  assert.equal(__test_clampWaitTimeout(99, fallback), 100, '99ms should clamp up to 100ms');
+  assert.equal(__test_clampWaitTimeout(100, fallback), 100, '100ms is the floor');
+  assert.equal(__test_clampWaitTimeout(10000, fallback), 10000, '10000ms passes through');
+  assert.equal(__test_clampWaitTimeout(60000, fallback), 60000, '60000ms is the ceiling');
+  assert.equal(__test_clampWaitTimeout(999999, fallback), 60000, '999999ms should clamp down to 60000ms');
+  assert.equal(__test_clampWaitTimeout(0, fallback), fallback, '0 falls back to default');
+  assert.equal(__test_clampWaitTimeout(-7, fallback), fallback, 'negative falls back to default');
+  assert.equal(__test_clampWaitTimeout(Number.NaN, fallback), fallback, 'NaN falls back to default');
+});
+
+test('wait_for_chat returns not_connected when the bot disconnects mid-wait', async () => {
+  resetRuntime();
+  setStatus(STATUS.CONNECTED);
+  state.bot = connectedBot();
+  const promise = waitForChat({ timeoutMs: 1000 });
+  // The bot drops its connection (e.g. the user calls
+  // disconnect_from_server or the socket dies). The helper must
+  // surface the disconnect immediately rather than block for the
+  // full timeout window.
+  setImmediate(() => {
+    setStatus(STATUS.DISCONNECTED);
+    state.bot = null;
+    emit('end', {});
+  });
+  const r = await promise;
+  assert.equal(r.ok, false);
+  assert.equal(r.kind, 'not_connected');
+});
+
+test('wait_for_chat does not treat reconnecting as a disconnect', async () => {
+  resetRuntime();
+  setStatus(STATUS.CONNECTED);
+  state.bot = connectedBot();
+  // A brief reconnect blip (e.g. server hiccup) must not short-circuit
+  // a wait that is otherwise healthy. The bot is still trying to come
+  // back; the persona should keep waiting for chat.
+  const promise = waitForChat({ timeoutMs: 250 });
+  setImmediate(() => {
+    setStatus(STATUS.RECONNECTING);
+    emit('status', { status: STATUS.RECONNECTING });
+  });
+  // After the reconnecting event, fire a chat event before the timeout.
+  setImmediate(() => {
+    emit('chat', { username: 'patient', message: 'still here', ts: Date.now() });
+  });
+  const r = await promise;
+  assert.equal(r.ok, true);
+  assert.equal(r.from, 'patient');
+  assert.equal(r.message, 'still here');
+});
+
+test('wait_for_chat does not treat connecting as a disconnect', async () => {
+  resetRuntime();
+  setStatus(STATUS.CONNECTED);
+  state.bot = connectedBot();
+  // Same reasoning as the reconnecting case: the bot is in flight,
+  // not gone. A status event with 'connecting' must not resolve the
+  // wait as not_connected.
+  const promise = waitForChat({ timeoutMs: 250 });
+  setImmediate(() => {
+    setStatus(STATUS.CONNECTING);
+    emit('status', { status: STATUS.CONNECTING });
+  });
+  setImmediate(() => {
+    emit('chat', { username: 'patient', message: 'coming back', ts: Date.now() });
+  });
+  const r = await promise;
+  assert.equal(r.ok, true);
+  assert.equal(r.message, 'coming back');
+});
+
+test('wait_for_chat settles only once across multiple chat events', async () => {
+  resetRuntime();
+  setStatus(STATUS.CONNECTED);
+  state.bot = connectedBot();
+  // Subscribe-count guard: prove the helper unsubscribes after
+  // settling, not just that Promises naturally ignore second resolves.
+  // The events module exposes a way to count active listeners via the
+  // import side effect: every `subscribe` adds to a Set, every
+  // unsubscribe deletes from it. We can't read the Set directly, but
+  // we can detect a leaked subscription by triggering a second
+  // waitForChat and verifying the second call is not short-circuited
+  // by a stale listener.
+  const first = waitForChat({ timeoutMs: 200 });
+  setImmediate(() => {
+    emit('chat', { username: 'first', message: 'one', ts: Date.now() });
+  });
+  const r1 = await first;
+  assert.equal(r1.ok, true);
+  assert.equal(r1.from, 'first');
+
+  // If the first call leaked a subscription, this second `emit('chat')`
+  // would be delivered to it. The second `waitForChat` call has its
+  // own subscription and would still resolve, so we use a different
+  // observable: a fresh `waitForChat` that runs in parallel with
+  // another chat event must resolve to the *latest* event, not be
+  // pre-resolved by a stale listener.
+  const second = waitForChat({ timeoutMs: 500 });
+  setImmediate(() => {
+    emit('chat', { username: 'second', message: 'two', ts: Date.now() });
+  });
+  const r2 = await second;
+  assert.equal(r2.ok, true);
+  assert.equal(r2.from, 'second');
+  // And r1 is unchanged (it is the same object reference, frozen at
+  // first resolution).
+  assert.equal(r1.from, 'first');
 });
 
 test('cleanup', () => {

@@ -22,7 +22,7 @@ import {
   getStatus,
 } from '../connection.js';
 import { state } from '../state.js';
-import { say } from '../skills/chat.js';
+import { say, waitForChat } from '../skills/chat.js';
 import { shutdown, writeSessionSummary, commitImprovements } from '../shutdown.js';
 import {
   createSkill,
@@ -157,6 +157,28 @@ export const tools = [
       // is the say() envelope: { ok, message: text }.
       return say({ message: text });
     },
+  },
+  {
+    name: 'wait_for_chat',
+    description:
+      "**The persona's idle tick. Call this whenever you have nothing " +
+      "else to do — and do not end your turn on player silence.** " +
+      "Blocks until the next in-world chat message arrives from a " +
+      "player, or until `timeoutMs` has elapsed (default 10000, " +
+      "clamped to [100, 60000]). On `ok: false, timeout: true`, this " +
+      "is the normal idle signal — call `wait_for_chat` again. This " +
+      "is not an error. Returns { ok: true, from, message, ts } on a " +
+      "chat message, { ok: false, timeout: true, error, waitedMs } on " +
+      "timeout, or { ok: false, error, kind: 'not_connected' } when " +
+      "the bot is offline. The persona must not consider its turn " +
+      "finished until the player tells it to leave the server.",
+    parameters: buildParameters({
+      timeoutMs: PARAM.number(
+        'How long to wait in milliseconds. Default 10000. ' +
+          'Clamped to [100, 60000].'
+      ),
+    }),
+    execute: async ({ timeoutMs } = {}) => waitForChat({ timeoutMs }),
   },
   {
     name: 'ask_user_for_server',

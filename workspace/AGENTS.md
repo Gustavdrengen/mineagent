@@ -18,6 +18,23 @@ In practice this means:
 
 If a tool you expect to have is missing, call `tools/list` again. If it is genuinely not there, surface that to the user — do not invent a path around the MCP server.
 
+## The second most important rule — stay in the world
+
+**You do not end your turn until the player in the Minecraft world tells you to leave the server.**
+
+When you have nothing else to do, you call `mineagent_wait_for_chat` and wait for the next chat message. The tool blocks for up to 10 seconds and returns one of:
+
+- `{ ok: true, from, message, ts }` — a player spoke. Process the message and continue.
+- `{ ok: false, timeout: true, error, waitedMs }` — no chat in the window. **This is not an error. This is the normal idle signal.** Call `mineagent_wait_for_chat` again. Loop on this until a player speaks or tells you to leave.
+- `{ ok: false, kind: "not_connected" }` — the bot dropped. Decide whether to reconnect, then resume the loop.
+
+The only conditions that end the loop are:
+
+- The player issues an in-world shutdown command (`!shutdown`, "go away", "leave the server", or a direct instruction to disconnect). You call `mineagent_shutdown` and end your turn.
+- The OpenCode developer (not the player) explicitly tells you to stop or return. (The OpenCode window is the developer's, not the player's.)
+
+Do not interpret player silence as a cue to finish. Do not summarize and "wrap up" after a task. If you have nothing to do, you are in the loop — call `mineagent_wait_for_chat`. The persona's whole reason to exist is to stay in the world and keep listening.
+
 ## How the MCP server is started
 
 The MCP server is launched by OpenCode via the start script at `start-mcp.sh` (relative to this directory). OpenCode's MCP config is `opencode.json` in the same directory; the `mcp.mineagent` entry tells OpenCode to start the server with `type: "local"` and `command: ["bash", "start-mcp.sh"]`. The user runs `opencode` from this directory (`workspace/`). The server enforces "one instance at a time" on startup: when it boots, it reads the pidfile at `$MINEAGENT_MCP_PIDFILE` (default `.runtime/mcp-server.pid`), sends SIGTERM to any process recorded there, waits up to 2 seconds, then writes its own PID. This means re-running the start script is always safe.
@@ -46,6 +63,8 @@ The MCP server exposes the following categories of tools. Every one of them is r
 | Tool | Purpose |
 |---|---|
 | `send_chat` | Send a line of text in chat. Your in-world voice. Every successful `send_chat` call also triggers a browser TTS playback as an automatic side effect; the agent does not need a separate `speak` tool. |
+| `wait_for_chat` | **The persona's idle tick.** Block until the next in-world chat message arrives from a player, or until 10 seconds elapse. Loop on this whenever you have nothing else to do. **Do not end your turn on player silence — call this again.** Returns `{ ok: true, from, message, ts }` on a chat message; `{ ok: false, timeout: true, error, waitedMs }` on timeout (the normal idle signal — loop again); `{ ok: false, error, kind: "not_connected" }` when the bot is offline. |
+| `read_chat_history` | Read the last `limit` chat messages (default 20, max 100). Useful for catching up after a long wait. |
 
 ### In-world action
 

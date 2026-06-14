@@ -44,6 +44,7 @@ The `execute` function is the runtime entry point. The **manifest** is the proje
 | `set_username` | Override the configured username for the next connect. |
 | `connection_status` | Live snapshot of the bot state. |
 | `send_chat` | Send a line of text in chat. Auto-plays through the browser observer TTS as an automatic side effect. Returns `{ ok: true, message: text }` on success; `{ ok: false, error, kind: 'not_connected' }` when the bot is offline; `{ ok: false, error, kind: 'message_required' }` on empty input. The single in-world voice path — the agent never calls a separate TTS tool. |
+| `wait_for_chat` | Block until the next in-world chat message arrives from a player, or until `timeoutMs` has elapsed. Default `timeoutMs` is 10000 (10s), clamped to [100, 60000]. This is the persona loop's idle tick — when the agent has nothing else to do, it calls this tool to keep listening for the next player message instead of returning control to the OpenCode user. Returns `{ ok: true, from, message, ts }` on a chat message; `{ ok: false, timeout: true, error, waitedMs }` on timeout; `{ ok: false, error, kind: 'not_connected' }` when the bot is offline. |
 | `ask_user_for_server` | Get a prompt to ask the user for an IP/port. |
 | `connect_to_last_known_server` | Re-connect to the server in `memories/last-server.json`. |
 | `forget_last_server` | Clear the remembered server. |
@@ -119,6 +120,12 @@ Every `execute` returns a structured object. The shape is:
 ```
 
 Tool results never throw. Failures are always `{ ok: false, error, kind? }`.
+
+Some tools add tool-specific fields to the envelope:
+
+- `wait_for_chat` adds `timeout: true` and `waitedMs: number` to its `ok: false` return when the wait window elapsed with no chat. **This is not a tool error** — it is the normal idle signal the persona loop uses to decide "no one spoke, call `wait_for_chat` again." The persona loop is responsible for distinguishing `ok: false, timeout: true` (idle, keep looping) from `ok: false, kind: <error>` (a genuine failure, branch on `kind`).
+- `wait_for_chat` on success adds `from`, `message`, and `ts` to the `ok: true` return (the chat message it caught).
+- Other in-world tools may add structured payloads (`entities`, `block`, `position`, etc.) to their `ok: true` returns. See the per-tool descriptions.
 
 ### Error kinds
 
