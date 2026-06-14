@@ -1,15 +1,15 @@
 // MineAgent MCP server.
 //
 // A stdio JSON-RPC 2.0 server that exposes MineAgent's tool palette to
-// any MCP client (Codebuff, Claude Desktop, a custom harness, the test
-// runner, the CLI itself). The protocol is the standard Model Context
-// Protocol 2024-11-05 surface; the wire format is line-delimited JSON
-// over stdin/stdout.
+// OpenCode (the single LLM harness that drives the agent) and to the
+// test runner. The protocol is the standard Model Context Protocol
+// 2024-11-05 surface; the wire format is line-delimited JSON over
+// stdin/stdout.
 //
 // Methods implemented:
 //
 //   initialize                  -> handshake, returns serverInfo + capabilities
-//   tools/list                  -> returns the harness-agnostic manifest
+//   tools/list                  -> returns the tool manifest (MCP wire format)
 //   tools/call                  -> invokes a tool by name with arguments
 //   notifications/initialized   -> acknowledged but produces no response
 //   notifications/cancelled     -> acknowledged but produces no response
@@ -32,11 +32,11 @@
 //      JSON-RPC parse error. Concurrent requests are dispatched in
 //      parallel; responses are written to stdout in completion order.
 //
-// **Decision:** stdio JSON-RPC over a single TCP port. **Tier:** T1.
-// **Evidence:** The MCP spec's primary transport is stdio JSON-RPC; any
-// client that supports MCP speaks it. **Trade-off:** No multi-client
-// support — only one harness can drive MineAgent at a time. This is
-// fine for the persona use case (one bot, one driver).
+// **Decision:** stdio JSON-RPC over stdio. **Tier:** T1.
+// **Evidence:** The MCP spec's primary transport is stdio JSON-RPC;
+// OpenCode speaks it natively. **Trade-off:** No multi-client support —
+// only one driver can be attached to the bot at a time. This is fine
+// for the MineAgent use case (one bot, one OpenCode session).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -213,21 +213,19 @@ async function handleRequest(msg) {
       // The MCP 2024-11-05 wire format names the argument schema
       // `inputSchema` (camelCase). The internal registry in
       // `src/tools/index.js` calls it `parameters` — that is the
-      // harness-agnostic name. The MCP server is the adapter that
-      // does the rename on the way out so the response validates
-      // against a strict MCP client schema.
+      // internal name. The MCP server is the adapter that does the
+      // rename on the way out so the response validates against a
+      // strict MCP client schema.
       //
       // **Decision:** Rename `parameters` -> `inputSchema` at the
       // MCP boundary, not in the registry. **Tier:** T1.
       // **Evidence:** The MCP spec (2024-11-05) defines
       // `inputSchema` as the field name on the tool descriptor.
-      // Clients validate the response with a strict Zod schema and
-      // reject the whole manifest when this is missing or the wrong
-      // type. **Trade-off:** Internal callers of `getToolManifest()`
-      // still see `parameters`; the rename is a wire-format concern,
-      // not a registry rename. Adapters for other harnesses (OpenAI,
-      // Anthropic, Gemini) live at the same boundary and can do
-      // their own renames.
+      // OpenCode validates the response with a strict schema and
+      // rejects the whole manifest when this is missing or the
+      // wrong type. **Trade-off:** Internal callers of
+      // `getToolManifest()` still see `parameters`; the rename is a
+      // wire-format concern, not a registry rename.
       const tools = getToolManifest().map(({ name, description, parameters }) => ({
         name,
         description,

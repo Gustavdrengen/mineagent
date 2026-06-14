@@ -1,7 +1,7 @@
 // Persona entry point for MineAgent.
 //
 // This is the single, programmatic way to boot the in-world persona.
-// A parent agent, a test harness, or the CLI can call `startPersona` to
+// OpenCode, the test runner, or the CLI can call `startPersona` to
 // get a fully wired MineAgent: tool manifest exposed, last-known
 // server offered, connection attempted, chat listener attached, and the
 // observer server started if requested.
@@ -182,8 +182,8 @@ export async function startPersona({
     detach: () => {
       detachChat();
     },
-    // Surface the harness-agnostic call entry point for callers that
-    // want to invoke tools directly without going through runGoal.
+    // Surface the call entry point for callers that want to invoke
+    // tools directly without going through runGoal.
     callTool,
     shutdown: disconnectFromServer,
   };
@@ -191,7 +191,7 @@ export async function startPersona({
 
 // Public surface: the manifest, the dispatcher, and the persona
 // entry point. The full `tools` array (with `execute` functions) is
-// intentionally NOT re-exported — harnesses should consume the
+// intentionally NOT re-exported — callers should consume the
 // manifest and route tool calls through `callTool` so that the
 // unknown-tool diagnostic and exception wrapping are guaranteed.
 //
@@ -200,9 +200,8 @@ export async function startPersona({
 // deliberate — the in-process call is the runtime path, and forcing
 // the persona to round-trip through the MCP server's stdio JSON-RPC
 // would add a parse/encode step with no benefit. The MCP server
-// (src/mcp-server.js) is the *public* surface for any external LLM
-// harness (Codebuff, Claude Desktop, a custom agent, the CLI in
-// --mcp mode). Both paths wrap the same `tools` array.
+// (src/mcp-server.js) is the *public* surface for OpenCode and for
+// the test runner. Both paths wrap the same `tools` array.
 export {
   callTool,
   getToolManifest,

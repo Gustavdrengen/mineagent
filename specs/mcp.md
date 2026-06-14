@@ -1,6 +1,6 @@
 # MineAgent MCP Server Spec
 
-The behavior contract for the stdio JSON-RPC 2.0 server at `src/mcp-server.js`. The server is the single tool source for the MineAgent persona and for any MCP client (Codebuff, Claude Desktop, a custom harness, the test runner, the CLI). The persona never calls into `src/` directly.
+The behavior contract for the stdio JSON-RPC 2.0 server at `src/mcp-server.js`. The server is the single tool source for the MineAgent OpenCode agent and for the test runner. The persona never calls into `src/` directly.
 
 ## Transport
 
@@ -17,7 +17,7 @@ The server implements the subset of the Model Context Protocol 2024-11-05 spec t
 |---|---|---|
 | `initialize` | request | Handshake. Returns protocol version, capabilities, and server info. |
 | `ping` | request | Liveness check. Returns `{}`. |
-| `tools/list` | request | Returns the harness-agnostic manifest. |
+| `tools/list` | request | Returns the tool manifest in MCP 2024-11-05 wire format. |
 | `tools/call` | request | Invokes a tool by name with arguments. |
 | `notifications/initialized` | notification | Client signals it has consumed the initialize response. No reply. |
 | `notifications/cancelled` | notification | Client cancels an in-flight request. Acknowledged but produces no reply. |
@@ -46,7 +46,7 @@ The `execute` function is **not** included; the manifest is the wire-safe projec
 
 ### Why `inputSchema` and not `parameters`
 
-The internal tool registry in `src/tools/index.js` calls the argument schema `parameters` — that is the harness-agnostic name (also the convention used by OpenAI function calling and the original Anthropic tool use spec). The MCP 2024-11-05 wire format names the same field `inputSchema` (camelCase). The MCP server is the adapter that does the rename on the way out: `tools/list` reads `getToolManifest()` and projects each entry to `{ name, description, inputSchema: parameters }` before sending. The registry itself is unchanged. Adapters for other harnesses (OpenAI's `function.parameters`, Gemini's `parameters`, etc.) live at the same boundary and do their own renames.
+The internal tool registry in `src/tools/index.js` calls the argument schema `parameters` — that is the internal name. The MCP 2024-11-05 wire format names the same field `inputSchema` (camelCase). The MCP server is the adapter that does the rename on the way out: `tools/list` reads `getToolManifest()` and projects each entry to `{ name, description, inputSchema: parameters }` before sending. The registry itself is unchanged. OpenCode is the only harness that consumes the wire format, so the rename is the only one needed.
 
 Clients validate the response with a strict Zod schema. The response must contain `inputSchema` as a JSON object (not `null`, not `undefined`, not a JSON Schema string) — a missing or wrong-type `inputSchema` is rejected at the manifest level, not per-tool.
 

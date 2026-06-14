@@ -146,7 +146,7 @@ test('initialize returns protocolVersion, capabilities, and serverInfo', async (
   }
 });
 
-test('tools/list returns the harness-agnostic manifest without execute', async () => {
+test('tools/list returns the manifest without execute', async () => {
   const dir = makeTempDir('mineagent-mcp-list-');
   const { startMcpServer } = await import(pathToFileURL(serverPath).href);
   const stdin = makeLineReadable();
@@ -197,10 +197,10 @@ test('tools/list returns the harness-agnostic manifest without execute', async (
 
 test('tools/list manifests conform to the MCP 2024-11-05 wire format', async () => {
   // Regression test for the bug where the manifest used `parameters`
-  // (the harness-agnostic name) instead of `inputSchema` (the MCP
-  // spec field name). MCP clients validate the response with a strict
-  // Zod schema and reject the response when `inputSchema` is missing
-  // or not an object.
+  // (the internal registry name) instead of `inputSchema` (the MCP
+  // spec field name). MCP clients (OpenCode) validate the response
+  // with a strict schema and reject the response when `inputSchema`
+  // is missing or not an object.
   const dir = makeTempDir('mineagent-mcp-wireshape-');
   const { startMcpServer } = await import(pathToFileURL(serverPath).href);
   const stdin = makeLineReadable();
@@ -258,7 +258,7 @@ test('tools/list manifests conform to the MCP 2024-11-05 wire format', async () 
       assert.equal(
         tool.parameters,
         undefined,
-        `${tool.name}: the harness-agnostic \`parameters\` field must not appear on the MCP wire format`
+        `${tool.name}: the internal \`parameters\` field must not appear on the MCP wire format`
       );
     }
   } finally {

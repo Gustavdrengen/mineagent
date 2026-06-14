@@ -1,6 +1,6 @@
 // Tool registry for MineAgent.
 //
-// Every tool in MineAgent is described in a single, harness-agnostic shape:
+// Every tool in MineAgent is described in a single shape:
 //
 //   {
 //     name:        string,        // unique identifier
@@ -9,15 +9,12 @@
 //     execute:     async (args) => { ok, ... }
 //   }
 //
-// The SHAPE of `parameters` — a strict JSON Schema object (Draft 2020-12
-// compatible) with `{ type: "object", additionalProperties: false,
-// properties, required }` — is the convergence point across MCP, OpenAI
-// function calling, Anthropic tool use, and Gemini function calling.
-// The FIELD NAME varies by harness (MCP uses `inputSchema`, OpenAI
-// uses `function.parameters`, Gemini uses `parameters`, etc.). The
-// registry owns the shape and the canonical `parameters` name; each
-// harness adapter (e.g. the MCP server in `src/mcp-server.js`) does
-// its own rename on the way out.
+// The registry's internal field name is `parameters`. The MCP wire
+// format (the only consumer) names the same field `inputSchema`; the
+// MCP server in `src/mcp-server.js` does the rename on the way out.
+// OpenCode prefixes every tool with the server name (`mineagent_*`),
+// so the agent sees e.g. `mineagent_connect_to_server` in its tool
+// palette.
 
 import {
   connectToServer,

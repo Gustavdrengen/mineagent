@@ -1,6 +1,6 @@
 # MineAgent Tool Spec
 
-This is the behavior contract for every tool the MineAgent persona exposes to its LLM harness. The shape is **harness-agnostic** by design — a thin adapter layer (not shipped in this repo) can map it to MCP `inputSchema`, OpenAI `parameters`, or any other envelope. No provider-specific fields are present in the wire format.
+This is the behavior contract for every tool the MineAgent persona exposes to OpenCode. The wire format is the MCP 2024-11-05 tool descriptor shape; the internal registry uses a `parameters` field name that the MCP server renames to `inputSchema` on the way out.
 
 ## Tool descriptor shape
 
@@ -33,22 +33,7 @@ The `parameters` object is the **convergence point** across MCP, OpenAI function
 
 ## Wire format vs runtime
 
-The `execute` function is the runtime entry point. The **manifest** is the projection of the registry without `execute`. Adapters should:
-
-1. Call `getToolManifest()` from `src/tools/index.js` to get the manifest.
-2. Map each entry to the harness-specific envelope.
-3. Route harness tool calls to `callTool(name, args)` in the same module.
-
-## Harness adapter map (informational, not implemented here)
-
-| MineAgent | OpenAI | Anthropic / MCP | Gemini |
-|---|---|---|---|
-| `name` | `function.name` | `name` | `name` |
-| `description` | `function.description` | `description` | `description` |
-| `parameters` | `function.parameters` | `input_schema` | `parameters` |
-| (envelope) | `{ type: "function", function: {...} }` | `{...}` (no envelope) | `{...}` (no envelope) |
-
-The user-facing API in MineAgent is just `getToolManifest()` and `callTool(name, args)`. Any adapter is a one-page transformation.
+The `execute` function is the runtime entry point. The **manifest** is the projection of the registry without `execute`. The MCP server is the only adapter; it maps the registry's `parameters` field to the MCP wire format's `inputSchema` field on the way out and routes tool calls to `callTool(name, args)` in the same module.
 
 ## Tool list
 

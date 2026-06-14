@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "mineagent": {
+      "type": "local",
+      "command": ["bash", "workspace/start-mcp.sh"],
+      "enabled": true,
+      "environment": {
+        "MINEAGENT_MCP_PIDFILE": ".runtime/mcp-server.pid"
+      }
+    }
+  }
+}
