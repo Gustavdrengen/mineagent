@@ -289,9 +289,13 @@ When the player tells the bot to shut down, MineAgent should:
 1. stop taking new work
 2. finish or safely stop current actions
 3. move any session-specific notes into `memories/`
-4. promote only general, reusable improvements into `skills/` or `scripts/`
-5. commit the promoted improvements with a special shutdown commit message
+4. apply only the committable improvements the user has explicitly approved
+5. commit the approved improvements with a shutdown commit message
 6. disconnect cleanly from the server
+
+The shutdown commit is **proposal-gated**, not blanket. Every committed modification to `workspace/skills/` and `workspace/scripts/` must trace back to a proposal in `memories/proposals/` whose frontmatter status is `executed` (set when the persona ran the matching execute tool after the user said yes). Files without a matching approved proposal are left in the working tree and reported in the shutdown result as `unapproved`, so the user can decide what to do with them. The consult-before-commit rule is the only path from intent to a real commit on the project repo.
+
+A power-user escape hatch (`MA_SHUTDOWN_FORCE_COMMIT=1`) bypasses the proposal check and commits every changed file. It is intentionally not the default; consult-before-commit is the gate.
 
 The shutdown commit should preserve useful self-improvements from the session, while leaving session-specific memories (including `last-server.json`) uncommitted.
 

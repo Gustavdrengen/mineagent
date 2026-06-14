@@ -312,6 +312,29 @@ What is "there" but feels bad to use:
 - The shutdown-handler/commitImprovements tension noted in earlier state-of-play entries is still open. The shutdown path still auto-commits anything in `workspace/skills/` and `workspace/scripts/`. A future cleanup should make it only commit files with a matching approved proposal.
 - The `send_chat` error-kind string match noted in earlier state-of-play entries is still open. The `connection.js` error text could change and silently break the kind inference. A typed error class from `connection.js` would fix this.
 
+### 2026-06-14 — proposal-gated shutdown commit, consult-before-commit enforced at shutdown
+
+What works:
+- `commitImprovements()` no longer commits every changed file in `workspace/skills/` and `workspace/scripts/`. It now reads `memories/proposals/`, builds a set of names whose frontmatter status is `executed` (set by the execute tool when the persona runs it after the user says yes), and only `git add` / `git commit` the files whose basename matches. Unapproved files are left in the working tree and reported in the result under `unapproved`. The shutdown auto-commit tension that has been flagged in every state-of-play entry for five sessions is resolved.
+- `src/improve.js`: the execute tools (`create_skill`, `update_skill`, `remove_skill`, `create_script`) now accept an optional `proposalId` parameter and, when present or resolvable, rewrite the matching proposal's frontmatter to `status: executed` and stamp `executedAt: <iso>`. The implicit-link path finds the most recent `proposed` proposal for the same name and links it. The sort uses lexicographic basename order (not mtime), so an out-of-band file touch cannot cause the wrong proposal to be linked.
+- `listApprovedProposals(proposalsDirOverride?)` is the new public surface the shutdown handler uses. It returns a flat list of approved names. The override is what makes throwaway-repo tests work.
+- `MA_SHUTDOWN_FORCE_COMMIT=1` is the escape hatch: when set, the proposal filter is bypassed and every changed file is committed. It is opt-in, not default.
+- `commitImprovements` now uses `git status --porcelain --untracked-files=all` so new skills (untracked files inside an untracked directory) are visible. The default `normal` mode hid them behind the directory entry.
+- The test-mode env-var guard and the throwaway-repo pattern in `test/shutdown.test.js` both stay in place as defense in depth.
+- New spec at `specs/shutdown.md` is the new source of truth for the proposal-gated commit contract, the escape hatch, the `unapproved` envelope field, and the test-mode guard. The VISION.md shutdown section was rewritten to point at the proposal-gated contract.
+- 171/171 tests passing (`npm test`). Smoke check OK (`npm run smoke`).
+
+What is broken / rough / missing in a way a user would notice:
+- The createSkill/proposeSkillChange lifecycle tests in `test/shutdown.test.js` (the ones that exercise `linkExecutedProposal`) still write to the real `paths.skillsDir` and `paths.proposalsDir` rather than a throwaway. Test pollution risk is mitigated by `try/finally` + `unlinkSync`, but a test that aborts before `finally` runs would leave `link-test-explicit.md` / `link-test-implicit.md` files and matching proposals in the committed workspace, breaking the next `npm test` run. A follow-up should route those tests through a temp `proposalsDir` (the same parameterization already on the shutdown side) and add a `process.on('exit')` cleanup for the proposals dir.
+- `linkExecutedProposal` still hard-codes the module-level `proposalsDir` constant (not overridable like `listApprovedProposals`). A future test that wants to call `create_skill` with a `proposalId` in a throwaway proposals dir cannot.
+- The tools/index.js wrappers (`create_skill`, `update_skill`, etc.) do not expose `proposalId` to the persona. The persona loop falls back to the implicit-link heuristic ("find the latest matching proposed proposal") on every call. The behavior is correct, but the persona is silently relying on the heuristic — if two proposals for the same skill coexist (r1 proposed, r1 rejected, r2 proposed), the heuristic is fine because r1 is no longer `proposed`. A future cleanup should expose `proposalId` in the tool descriptors so the persona can be explicit.
+- The implicit-link test uses a 5ms `setTimeout` between two `propose_skill_change` calls. A more robust fix lives in `proposalTimestamp()`: append a per-process counter so two proposals in the same millisecond can never collide on filename. The 5ms sleep is a test-only hack that signals the production code is wrong.
+- The `unapproved` field in the result is now always an array (including `[]` when the force flag is on and nothing is unapproved). This is a behavior change from "sometimes undefined, sometimes array" to "always array". The spec documents the always-array contract; the CLI doesn't read the field, but a future caller that does `if (r.unapproved)` will now branch on an empty array.
+
+What is "there" but feels bad to use:
+- The shutdown commit subject (`shutdown: apply approved skill changes (N files)`) does not list the filenames. `git show --stat` is the source of truth for that. A future cleanup could append the names to the subject when N is small (say, ≤ 3), but the current subject keeps the log readable for large batches.
+- The proposal frontmatter format is regex-parsed (`parseProposalFrontmatter`). It only handles the flat `key: value` lines that `propose_skill_change` writes. A hand-edited proposal with quoted values or multi-line fields would not parse. The spec says the frontmatter is produced by `propose_skill_change` and is never user-edited, so this is fine in practice — but the regex parser is a sharp edge if the format ever changes.
+
 ### 2026-06-14 — drop spurious shutdown commits, add test-mode guard, continue mining/movement refinement
 
 What works:
